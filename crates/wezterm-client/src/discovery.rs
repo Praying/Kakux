@@ -30,7 +30,14 @@ mod unix {
             {
                 let config = config::configuration();
                 if config.enable_wayland {
-                    if let Ok(wayland) = std::env::var("WAYLAND_DISPLAY") {
+                    // Treat an empty WAYLAND_DISPLAY as unset: some launchers
+                    // set it to "" and the wayland client cannot connect
+                    // through that, so the gui falls back to X11 and the
+                    // socket name must follow the actual backend.
+                    if let Some(wayland) = std::env::var("WAYLAND_DISPLAY")
+                        .ok()
+                        .filter(|s| !s.is_empty())
+                    {
                         return format!("wayland-{}-{}", wayland, class_name);
                     }
                     // We don't assume a default WAYLAND_DISPLAY here because

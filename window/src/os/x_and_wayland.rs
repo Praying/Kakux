@@ -49,14 +49,15 @@ impl Connection {
         if config::configuration().enable_wayland {
             match WaylandConnection::create_new() {
                 Ok(w) => {
-                    log::debug!("Using wayland connection!");
+                    log::info!("Using wayland connection!");
                     return Ok(Connection::Wayland(Rc::new(w)));
                 }
                 Err(e) => {
-                    log::debug!("Failed to init wayland: {}", e);
+                    log::warn!("Failed to init wayland, falling back to X11: {}", e);
                 }
             }
         }
+        log::info!("Using X11 connection!");
         Ok(Connection::X11(XConnection::create_new()?))
     }
 
