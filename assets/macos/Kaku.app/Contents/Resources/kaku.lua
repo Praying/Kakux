@@ -4545,7 +4545,13 @@ config.macos_global_hotkey_height_percent = 100 / 3
 config.macos_global_hotkey_animation_duration_ms = 200
 config.macos_global_hotkey_hide_on_focus_loss = true
 -- config.macos_global_hotkey_extend_behind_notch = false
-config.quit_when_all_windows_are_closed = false
+-- macOS keeps the process alive with no windows (Dock reopen is instant);
+-- on Linux closing the last window should quit, as every other app does.
+if wezterm.target_triple:find('darwin', 1, true) then
+  config.quit_when_all_windows_are_closed = false
+else
+  config.quit_when_all_windows_are_closed = true
+end
 
 -- ===== Key Bindings =====
 -- Wrapped in an IIFE so the ~50-entry table constructor gets its own function

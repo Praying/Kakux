@@ -1298,6 +1298,54 @@ impl TermWindow {
             _window.order_out();
             return;
         }
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Everywhere else a close destroys the window and its panes,
+            // honoring window_close_confirmation: SmartPrompt and
+            // AlwaysPrompt only prompt while a stateful process runs.
+            let mux = Mux::get();
+            let mux_window_id = self.mux_window_id;
+            let can_close = mux
+                .get_window(mux_window_id)
+                .map_or(true, |w| w.can_close_without_prompting());
+            let should_confirm = match self.config.window_close_confirmation {
+                WindowCloseConfirmation::NeverPrompt => false,
+                WindowCloseConfirmation::AlwaysPrompt | WindowCloseConfirmation::SmartPrompt => {
+                    !can_close
+                }
+            };
+            if !should_confirm {
+                mux.kill_window(mux_window_id);
+                _window.close();
+                front_end().forget_known_window(_window);
+                return;
+            }
+            let tab = match mux.get_active_tab_for_window(mux_window_id) {
+                Some(tab) => tab,
+                None => {
+                    mux.kill_window(mux_window_id);
+                    _window.close();
+                    front_end().forget_known_window(_window);
+                    return;
+                }
+            };
+            if let Some(window) = self.window.clone() {
+                let frame = self.confirm_frame_color();
+                let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {
+                    crate::overlay::confirm_close_pane::confirm_close_window(
+                        frame,
+                        term,
+                        mux_window_id,
+                        window,
+                        tab_id,
+                    )
+                });
+                self.assign_overlay(tab.tab_id(), overlay);
+                promise::spawn::spawn(future).detach();
+            }
+            // Don't close right now; the confirmation overlay closes the
+            // window when the user accepts.
+        }
     }
 
     fn focus_changed(&mut self, focused: bool, window: &Window) {
@@ -7052,7 +7100,7 @@ mod tests {
             source
                 .matches("let frame = self.confirm_frame_color();")
                 .count(),
-            7
+            8
         );
     }
 

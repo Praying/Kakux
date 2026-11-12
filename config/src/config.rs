@@ -1921,6 +1921,21 @@ impl Config {
             cfg.background.insert(0, bg);
         }
 
+        // INTEGRATED_BUTTONS (window buttons drawn into the tab bar instead
+        // of a titlebar) is implemented by the macOS backend only. Reading it
+        // on other platforms would produce an undecorated window that cannot
+        // be dragged, resized, maximized or closed, so fall back to a normal
+        // titlebar there. Configs shared with a Mac keep working unchanged.
+        #[cfg(not(target_os = "macos"))]
+        if cfg
+            .window_decorations
+            .contains(WindowDecorations::INTEGRATED_BUTTONS)
+        {
+            cfg.window_decorations.insert(WindowDecorations::TITLE);
+            cfg.window_decorations
+                .remove(WindowDecorations::INTEGRATED_BUTTONS);
+        }
+
         cfg
     }
 

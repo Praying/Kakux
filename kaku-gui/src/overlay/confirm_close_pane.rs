@@ -71,6 +71,32 @@ pub fn confirm_close_tab(
     Ok(())
 }
 
+pub fn confirm_close_window(
+    frame: SrgbaTuple,
+    mut term: TermWizTerminal,
+    mux_window_id: WindowId,
+    window: ::window::Window,
+    tab_id: TabId,
+) -> anyhow::Result<()> {
+    if confirm::run_confirmation(
+        "Close this window?\nAll tabs and panes in it will be terminated.",
+        frame,
+        &mut term,
+    )? {
+        window.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+            let mux = Mux::get();
+            mux.kill_window(mux_window_id);
+            if let Some(window) = term_window.window.clone() {
+                window.close();
+                crate::frontend::front_end().forget_known_window(&window);
+            }
+        })));
+    }
+    TermWindow::schedule_cancel_overlay(window, tab_id, None);
+
+    Ok(())
+}
+
 pub fn confirm_apply_update(
     frame: SrgbaTuple,
     mut term: TermWizTerminal,
