@@ -108,15 +108,24 @@ pub struct KakuFrame<State> {
 struct ShapedTitle {
     title: String,
     glyphs: Vec<ShapedGlyph>,
-    metrics: FontMetrics,
+    /// The descender in header-buffer pixels, already scaled.
+    descender: f32,
     state: WindowState,
     dpi: usize,
     scale: u32,
 }
 
+/// A glyph scaled to the header buffer's pixel space, ready to blit.
 struct ShapedGlyph {
-    info: GlyphInfo,
-    glyph: RasterizedGlyph,
+    /// The scaled, tinted bitmap in premultiplied BGRA (the SHM layout).
+    data: Vec<u8>,
+    width: u32,
+    height: u32,
+    x_offset: f32,
+    bearing_x: f32,
+    bearing_y: f32,
+    y_offset: f32,
+    x_advance: f32,
 }
 
 impl<State> KakuFrame<State>
@@ -233,7 +242,16 @@ where
 
     /// Shape the title with the terminal's title font, tinting monochrome
     /// glyphs with the active titlebar foreground color. Ported from the
-    /// ConceptFrame implementation.
+    /// Shape the title with the terminal's title font and scale every glyph
+    /// into the header's own pixel space.
+    ///
+    /// The font stack sizes the title font from the *terminal's* dpi, which
+    /// also carries the terminal font scale; the header buffer instead lives
+    /// in `HEADER_SIZE * surface_scale` pixels. On macOS those coincide, but
+    /// elsewhere they can differ by 2x or more, which once drew the glyphs
+    /// twice as tall as the header and mostly above the canvas. Scaling the
+    /// rasterized bitmaps here makes the drawn title a fixed fraction of the
+    /// header height regardless of the terminal's dpi.
     fn reshape_title(&mut self) {
         let Some(font_config) = self.font_config.clone() else {
             return;
@@ -287,17 +305,34 @@ where
             colors.inactive_fg
         };
 
+        // Aim the font's cell height at ~45% of the header bar, scaled by
+        // the user's window_frame.font_size preference (12 is the default),
+        // and clamped so an oversized preference cannot leave the header.
+        let font_config_handle = font_config.config();
+        let size_factor = font_config_handle.window_frame.font_size.unwrap_or(12.) as f32 / 12.;
+        let max_cell_px = HEADER_SIZE as f32 * scale as f32 * 0.7;
+        let target_px = (HEADER_SIZE as f32 * scale as f32 * 0.45 * size_factor).min(max_cell_px);
+        let cell_px = metrics.cell_height.get() as f32;
+        let ratio = if cell_px > 0. {
+            target_px / cell_px
+        } else {
+            1.
+        };
+
         let mut glyphs = vec![];
         for info in infos {
-            if let Ok(mut glyph) = font.rasterize_glyph(info.glyph_pos, info.font_idx) {
+            if let Ok(glyph) = font.rasterize_glyph(info.glyph_pos, info.font_idx) {
+                // Work on a copy: the rasterizer may cache the glyph, and we
+                // rewrite the pixels below.
+                let mut data = glyph.data.clone();
                 // Fixup colors: they need to be switched to the SHM pixel
                 // format, and monochrome font data must be tinted with the
                 // title color. `RgbaColor` derefs to `SrgbaTuple`, whose
                 // `.0`/`.1`/`.2` are the straight-alpha float components.
-                if let Some(mut data) =
-                    PixmapMut::from_bytes(&mut glyph.data, glyph.width as u32, glyph.height as u32)
+                if let Some(mut pixmap) =
+                    PixmapMut::from_bytes(&mut data, glyph.width as u32, glyph.height as u32)
                 {
-                    for p in data.pixels_mut() {
+                    for p in pixmap.pixels_mut() {
                         let c = p.demultiply();
                         let (r, g, b, a) = (c.red(), c.green(), c.blue(), c.alpha());
                         if glyph.has_color {
@@ -314,41 +349,83 @@ where
                     }
                 }
 
-                glyphs.push(ShapedGlyph { info, glyph });
+                // Scale the bitmap into the header's pixel space.
+                let scaled_w = ((glyph.width as f32) * ratio).ceil().max(1.) as u32;
+                let scaled_h = ((glyph.height as f32) * ratio).ceil().max(1.) as u32;
+                let mut scaled = match tiny_skia::Pixmap::new(scaled_w, scaled_h) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                if let Some(src) =
+                    PixmapRef::from_bytes(&data, glyph.width as u32, glyph.height as u32)
+                {
+                    let paint = PixmapPaint {
+                        quality: tiny_skia::FilterQuality::Bilinear,
+                        ..Default::default()
+                    };
+                    scaled.draw_pixmap(
+                        0,
+                        0,
+                        src,
+                        &paint,
+                        tiny_skia::Transform::from_scale(ratio, ratio),
+                        None,
+                    );
+                }
+
+                glyphs.push(ShapedGlyph {
+                    data: scaled.take(),
+                    width: scaled_w,
+                    height: scaled_h,
+                    x_offset: info.x_offset.get() as f32 * ratio,
+                    bearing_x: glyph.bearing_x.get() as f32 * ratio,
+                    bearing_y: glyph.bearing_y.get() as f32 * ratio,
+                    y_offset: info.y_offset.get() as f32 * ratio,
+                    x_advance: info.x_advance.get() as f32 * ratio,
+                });
             }
         }
 
         self.shaped_title = Some(ShapedTitle {
             title: self.title.clone(),
             glyphs,
-            metrics,
+            descender: metrics.descender.get() as f32 * ratio,
             state: self.state,
             dpi: font_config.get_dpi(),
             scale,
         });
     }
 
-    /// Draw the title glyphs into the header canvas. The vertical placement
-    /// follows the ConceptFrame formula: baseline at 3/4 of the header
-    /// height, adjusted by the descender and per-glyph offsets.
+    /// Draw the pre-scaled title glyphs into the header canvas: baseline at
+    /// 3/4 of the header height, adjusted by the (already scaled) descender
+    /// and per-glyph offsets. All glyph metrics are in header-buffer pixels.
     fn draw_title(canvas: &mut [u8], width: u32, height: u32, scale: u32, shaped: &ShapedTitle) {
         let Some(mut pixmap) = PixmapMut::from_bytes(canvas, width * scale, height * scale) else {
             return;
         };
-        let mut x = 8.;
-        let limit = (width.saturating_sub(4 * HEADER_SIZE) * scale) as f64;
+        let mut x: f32 = 8. * scale as f32;
+        let limit = (width.saturating_sub(4 * HEADER_SIZE) * scale) as f32;
         let paint = PixmapPaint::default();
         for item in &shaped.glyphs {
-            if let Some(data) = PixmapRef::from_bytes(
-                &item.glyph.data,
-                item.glyph.width as u32,
-                item.glyph.height as u32,
-            ) {
+            let gx = x + item.x_offset + item.bearing_x;
+            let gy = height as f32 * scale as f32 * 3. / 4. + shaped.descender
+                - (item.y_offset + item.bearing_y);
+            if std::env::var_os("KAKU_FRAME_DEBUG").is_some() {
+                log::warn!(
+                    "kaku-frame: glyph canvas {}x{} scale {} draw_at ({}, {}) gw={} gh={}",
+                    width,
+                    height,
+                    scale,
+                    gx,
+                    gy,
+                    item.width,
+                    item.height
+                );
+            }
+            if let Some(data) = PixmapRef::from_bytes(&item.data, item.width, item.height) {
                 pixmap.draw_pixmap(
-                    (x + item.info.x_offset.get() + item.glyph.bearing_x.get()) as i32,
-                    (height * scale * 3 / 4) as i32
-                        + (shaped.metrics.descender - (item.info.y_offset + item.glyph.bearing_y))
-                            .get() as i32,
+                    gx as i32,
+                    gy as i32,
                     data,
                     &paint,
                     Transform::identity(),
@@ -356,7 +433,7 @@ where
                 );
             }
 
-            x += item.info.x_advance.get();
+            x += item.x_advance;
             if x >= limit {
                 // Don't overflow the buttons
                 break;
