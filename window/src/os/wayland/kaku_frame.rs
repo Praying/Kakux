@@ -400,19 +400,33 @@ where
         });
     }
 
-    /// Draw the pre-scaled title glyphs into the header canvas: baseline at
-    /// 3/4 of the header height, adjusted by the (already scaled) descender
-    /// and per-glyph offsets. All glyph metrics are in header-buffer pixels.
+    /// Draw the pre-scaled title glyphs into the header canvas, horizontally
+    /// centered in the region left of the buttons: baseline at 3/4 of the
+    /// header height, adjusted by the (already scaled) descender and
+    /// per-glyph offsets. All glyph metrics are in header-buffer pixels.
     fn draw_title(canvas: &mut [u8], width: u32, height: u32, scale: u32, shaped: &ShapedTitle) {
         let Some(mut pixmap) = PixmapMut::from_bytes(canvas, width * scale, height * scale) else {
             return;
         };
-        let mut x: f32 = 8. * scale as f32;
-        let limit = (width.saturating_sub(4 * HEADER_SIZE) * scale) as f32;
+        let scale_f = scale as f32;
+        // The buttons occupy the rightmost button-count header cells; keep a
+        // symmetric 8px margin on both sides of the usable title region.
+        let left_margin = 8. * scale_f;
+        let right_reserve = 3. * HEADER_SIZE as f32 * scale_f + 8. * scale_f;
+        let usable = (width as f32 * scale_f - left_margin - right_reserve).max(0.);
+        // Measure how much of the title fits, then center it in the region.
+        let mut fitted = 0f32;
+        for item in &shaped.glyphs {
+            if fitted + item.x_advance > usable {
+                break;
+            }
+            fitted += item.x_advance;
+        }
+        let mut x: f32 = left_margin + (usable - fitted) / 2.;
         let paint = PixmapPaint::default();
         for item in &shaped.glyphs {
             let gx = x + item.x_offset + item.bearing_x;
-            let gy = height as f32 * scale as f32 * 3. / 4. + shaped.descender
+            let gy = height as f32 * scale_f * 3. / 4. + shaped.descender
                 - (item.y_offset + item.bearing_y);
             if std::env::var_os("KAKU_FRAME_DEBUG").is_some() {
                 log::warn!(
@@ -438,7 +452,7 @@ where
             }
 
             x += item.x_advance;
-            if x >= limit {
+            if x >= left_margin + usable {
                 // Don't overflow the buttons
                 break;
             }
