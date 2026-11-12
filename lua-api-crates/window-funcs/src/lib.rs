@@ -108,6 +108,10 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
                     {
                         window::query_appearance_early().to_string()
                     }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        "Light".to_string()
+                    }
                 }
             })
         })?,

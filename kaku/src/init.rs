@@ -22,7 +22,8 @@ impl InitCommand {
     }
 }
 
-#[cfg(target_os = "macos")]
+/// Binary and resource lookup differs per platform: macOS resolves through
+/// the Kaku.app bundle, Linux through the system install prefix.
 mod imp {
     use super::*;
     use crate::shell::{
@@ -30,6 +31,47 @@ mod imp {
         preferred_managed_shell, ManagedShell,
     };
     use std::os::unix::fs::PermissionsExt;
+
+    /// Absolute candidate locations for the `kaku`/`k` executables, most
+    /// preferred first.
+    fn bin_candidates(bin_name: &str) -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            candidates.push(exe.with_file_name(bin_name));
+        }
+        #[cfg(target_os = "macos")]
+        candidates.extend([
+            PathBuf::from("/Applications/Kaku.app/Contents/MacOS").join(bin_name),
+            config::HOME_DIR
+                .join("Applications")
+                .join("Kaku.app")
+                .join("Contents")
+                .join("MacOS")
+                .join(bin_name),
+        ]);
+        #[cfg(not(target_os = "macos"))]
+        candidates.extend([
+            PathBuf::from("/usr/local/bin").join(bin_name),
+            PathBuf::from("/usr/bin").join(bin_name),
+            config::HOME_DIR.join(".local").join("bin").join(bin_name),
+        ]);
+        candidates
+    }
+
+    /// Shell snippet listing the candidate binaries for the wrapper scripts.
+    fn wrapper_candidate_lines(bin_name: &str) -> String {
+        let candidates = bin_candidates(bin_name);
+        candidates
+            .iter()
+            .map(|p| {
+                format!(
+                    "\t\"{}\" \\",
+                    escape_for_double_quotes(&p.display().to_string())
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 
     pub fn run(update_only: bool, shell: Option<ManagedShell>) -> anyhow::Result<()> {
         let shell = select_shell(update_only, shell)?;
@@ -175,9 +217,16 @@ mod imp {
             })?;
         }
 
-        let preferred_bin = resolve_preferred_kaku_bin()
-            .unwrap_or_else(|| PathBuf::from("/Applications/Kaku.app/Contents/MacOS/kaku"));
-        let preferred_bin = escape_for_double_quotes(&preferred_bin.display().to_string());
+        let preferred_bin = resolve_preferred_kaku_bin();
+        let preferred_line = preferred_bin
+            .map(|p| {
+                format!(
+                    "\t\"{}\" \\\n",
+                    escape_for_double_quotes(&p.display().to_string())
+                )
+            })
+            .unwrap_or_default();
+        let candidate_lines = wrapper_candidate_lines("kaku");
 
         let script = format!(
             r#"#!/bin/bash
@@ -188,15 +237,13 @@ if [[ -n "${{KAKU_BIN:-}}" && -x "${{KAKU_BIN}}" ]]; then
 fi
 
 for candidate in \
-	"{preferred_bin}" \
-	"/Applications/Kaku.app/Contents/MacOS/kaku" \
-	"$HOME/Applications/Kaku.app/Contents/MacOS/kaku"; do
+{preferred_line}{candidate_lines}; do
 	if [[ -n "$candidate" && -x "$candidate" ]]; then
 		exec "$candidate" "$@"
 	fi
 done
 
-echo "kaku: Kaku.app not found. Expected /Applications/Kaku.app." >&2
+echo "kaku: no kaku executable found. Run 'kaku init' after installing Kaku." >&2
 exit 127
 "#
         );
@@ -236,24 +283,28 @@ exit 127
                 .with_context(|| format!("remove legacy symlink k wrapper {}", k_path.display()))?;
         }
 
-        let preferred_k_bin = resolve_preferred_k_bin()
-            .unwrap_or_else(|| PathBuf::from("/Applications/Kaku.app/Contents/MacOS/k"));
-        let preferred_k_bin = escape_for_double_quotes(&preferred_k_bin.display().to_string());
+        let preferred_line = resolve_preferred_k_bin()
+            .map(|p| {
+                format!(
+                    "\t\"{}\" \\\n",
+                    escape_for_double_quotes(&p.display().to_string())
+                )
+            })
+            .unwrap_or_default();
+        let candidate_lines = wrapper_candidate_lines("k");
 
         let script = format!(
             r#"#!/bin/bash
 set -euo pipefail
 
 for candidate in \
-	"{preferred_k_bin}" \
-	"/Applications/Kaku.app/Contents/MacOS/k" \
-	"$HOME/Applications/Kaku.app/Contents/MacOS/k"; do
+{preferred_line}{candidate_lines}; do
 	if [[ -n "$candidate" && -x "$candidate" ]]; then
 		exec "$candidate" "$@"
 	fi
 done
 
-echo "k: Kaku.app not found. Run 'kaku init' after installing Kaku." >&2
+echo "k: no k executable found. Run 'kaku init' after installing Kaku." >&2
 exit 127
 "#
         );
@@ -281,27 +332,9 @@ exit 127
     }
 
     fn resolve_preferred_k_bin() -> Option<PathBuf> {
-        if let Ok(exe) = std::env::current_exe() {
-            // current_exe is the `kaku` binary; `k` sits alongside it.
-            let k_candidate = exe.with_file_name("k");
-            if is_executable_file(&k_candidate) {
-                return Some(k_candidate);
-            }
-        }
-        for candidate in [
-            PathBuf::from("/Applications/Kaku.app/Contents/MacOS/k"),
-            config::HOME_DIR
-                .join("Applications")
-                .join("Kaku.app")
-                .join("Contents")
-                .join("MacOS")
-                .join("k"),
-        ] {
-            if is_executable_file(&candidate) {
-                return Some(candidate);
-            }
-        }
-        None
+        bin_candidates("k")
+            .into_iter()
+            .find(|p| is_executable_file(p))
     }
 
     fn wrapper_path(shell: ManagedShell) -> PathBuf {
@@ -337,21 +370,9 @@ exit 127
             }
         }
 
-        for candidate in [
-            PathBuf::from("/Applications/Kaku.app/Contents/MacOS/kaku"),
-            config::HOME_DIR
-                .join("Applications")
-                .join("Kaku.app")
-                .join("Contents")
-                .join("MacOS")
-                .join("kaku"),
-        ] {
-            if is_executable_file(&candidate) {
-                return Some(candidate);
-            }
-        }
-
-        None
+        bin_candidates("kaku")
+            .into_iter()
+            .find(|p| is_executable_file(p))
     }
 
     fn is_executable_file(path: &Path) -> bool {
@@ -400,23 +421,38 @@ exit 127
         }
 
         if let Some(exe) = exe {
+            #[cfg(target_os = "macos")]
             if let Some(contents_dir) = exe.parent().and_then(|p| p.parent()) {
                 candidates.push(contents_dir.join("Resources").join(script_name));
             }
+            // Linux layout: an exe in <prefix>/bin resolves its resources
+            // from <prefix>/share/kaku.
+            #[cfg(not(target_os = "macos"))]
+            if let Some(prefix_dir) = exe.parent().and_then(|p| p.parent()) {
+                candidates.push(prefix_dir.join("share").join("kaku").join(script_name));
+            }
         }
 
-        candidates.push(PathBuf::from(format!(
-            "/Applications/Kaku.app/Contents/Resources/{}",
-            script_name
-        )));
-        candidates.push(
-            config::HOME_DIR
-                .join("Applications")
-                .join("Kaku.app")
-                .join("Contents")
-                .join("Resources")
-                .join(script_name),
-        );
+        #[cfg(target_os = "macos")]
+        {
+            candidates.push(PathBuf::from(format!(
+                "/Applications/Kaku.app/Contents/Resources/{}",
+                script_name
+            )));
+            candidates.push(
+                config::HOME_DIR
+                    .join("Applications")
+                    .join("Kaku.app")
+                    .join("Contents")
+                    .join("Resources")
+                    .join(script_name),
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            candidates.push(PathBuf::from("/usr/local/share/kaku").join(script_name));
+            candidates.push(PathBuf::from("/usr/share/kaku").join(script_name));
+        }
 
         candidates
     }
@@ -474,7 +510,14 @@ exit 127
         }
 
         fn app_exe() -> PathBuf {
-            PathBuf::from("/Applications/Kaku.app/Contents/MacOS/kaku")
+            #[cfg(target_os = "macos")]
+            {
+                PathBuf::from("/Applications/Kaku.app/Contents/MacOS/kaku")
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                PathBuf::from("/usr/bin/kaku")
+            }
         }
 
         #[test]
@@ -488,11 +531,14 @@ exit 127
                 "release candidates must not come from the working directory: {:?}",
                 candidates
             );
+            #[cfg(target_os = "macos")]
+            let expected_first =
+                PathBuf::from("/Applications/Kaku.app/Contents/Resources/setup_zsh.sh");
+            #[cfg(not(target_os = "macos"))]
+            let expected_first = PathBuf::from("/usr/share/kaku/setup_zsh.sh");
             assert_eq!(
                 candidates.first(),
-                Some(&PathBuf::from(
-                    "/Applications/Kaku.app/Contents/Resources/setup_zsh.sh"
-                )),
+                Some(&expected_first),
                 "the bundled script comes first: {candidates:?}"
             );
         }

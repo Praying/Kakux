@@ -1,6 +1,9 @@
 use anyhow::{anyhow, bail, ensure, Error};
 use std::ffi::c_void;
 use std::rc::Rc;
+#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(feature = "wayland")]
+use wayland_egl;
 
 #[allow(non_camel_case_types, clippy::unreadable_literal)]
 pub mod ffi {
@@ -392,7 +395,12 @@ impl GlState {
     fn with_egl_lib<F: FnMut(EglWrapper) -> anyhow::Result<Self>>(
         mut func: F,
     ) -> anyhow::Result<Self> {
-        let mut paths: Vec<std::path::PathBuf> = vec![];
+        let mut paths: Vec<std::path::PathBuf> = vec![
+            #[cfg(all(unix, not(target_os = "macos")))]
+            "libEGL.so.1".into(),
+            #[cfg(all(unix, not(target_os = "macos")))]
+            "libEGL.so".into(),
+        ];
 
         if cfg!(target_os = "macos") {
             let exe_parent = std::env::current_exe()?
@@ -458,6 +466,24 @@ impl GlState {
             prefer_swrast = true;
         }
         bail!("with_egl_lib failed: {}", errors.join(", "))
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(feature = "wayland")]
+    pub fn create_wayland(
+        display: Option<ffi::EGLNativeDisplayType>,
+        wegl_surface: &wayland_egl::WlEglSurface,
+    ) -> anyhow::Result<Self> {
+        Self::create(display, wegl_surface.ptr())
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(feature = "wayland")]
+    pub fn create_wayland_with_existing_connection(
+        connection: &Rc<GlConnection>,
+        wegl_surface: &wayland_egl::WlEglSurface,
+    ) -> anyhow::Result<Self> {
+        Self::create_with_existing_connection(connection, wegl_surface.ptr())
     }
 
     pub fn create(

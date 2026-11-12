@@ -71,11 +71,22 @@ fn run() {
             }
             if stall_start.is_some() && !rescued && answered.get().is_none() {
                 rescued = true;
-                log::warn!(
-                    "GUI thread still blocked: {}",
-                    window::main_thread_queue_state()
-                );
-                window::rescue_main_thread_queue();
+                #[cfg(target_os = "macos")]
+                {
+                    log::warn!(
+                        "GUI thread still blocked: {}",
+                        window::main_thread_queue_state()
+                    );
+                    window::rescue_main_thread_queue();
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // The dispatch-queue rescue is macOS machinery; on Linux
+                    // the event loop is our own, so a blocked GUI thread is
+                    // a bug to debug from the log, not something to route
+                    // around at runtime.
+                    log::warn!("GUI thread still blocked: no rescue available");
+                }
             }
         }
         if let (Some(start), Some(ran)) = (stall_start, answered.get()) {

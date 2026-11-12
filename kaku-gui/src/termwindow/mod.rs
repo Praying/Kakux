@@ -1279,6 +1279,8 @@ impl TermWindow {
         // LOGICALLY_CLOSED_WINDOWS and starve the session save at main.rs:940.
         #[cfg(target_os = "macos")]
         let is_app_quitting = ::window::is_app_terminating();
+        #[cfg(not(target_os = "macos"))]
+        let is_app_quitting = false;
 
         if !is_app_quitting {
             if self.config.restore_previous_session {
@@ -1300,6 +1302,12 @@ impl TermWindow {
 
     fn focus_changed(&mut self, focused: bool, window: &Window) {
         log::trace!("Setting focus to {:?}", focused);
+        // Drives the Linux app-activity check used by task notifications.
+        #[cfg(not(target_os = "macos"))]
+        {
+            use std::sync::atomic::Ordering;
+            crate::overlay::ai_chat::state::APP_WINDOW_FOCUSED.store(focused, Ordering::Relaxed);
+        }
         if focused {
             // On macOS a closed window is only hidden (see close_requested) and a
             // Dock click brings it back via makeKeyAndOrderFront, which lands here.
@@ -1631,6 +1639,8 @@ impl TermWindow {
         } else {
             WindowState::empty()
         };
+        #[cfg(not(target_os = "macos"))]
+        let initial_window_state = WindowState::empty();
         let config = window_configuration(initial_window_state, &Value::default());
         let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi()) as usize;
         crate::startup_trace::mark("  FontConfiguration#2 start");
@@ -2000,6 +2010,8 @@ impl TermWindow {
         } else {
             window.show();
         }
+        #[cfg(not(target_os = "macos"))]
+        window.show();
         crate::startup_trace::mark("  window.show() done");
 
         crate::startup_trace::mark("  GPU init start");
@@ -5653,6 +5665,8 @@ impl TermWindow {
                                 && crate::macos::file_link::should_open_with_default_app(
                                     &target.path,
                                 );
+                            #[cfg(not(target_os = "macos"))]
+                            let use_default_app = false;
 
                             crate::thread_util::spawn_with_pool(move || {
                                 if let Err(err) = TermWindow::open_file_link_target(

@@ -43,6 +43,8 @@ pub use raw_window_handle;
 
 #[cfg(target_os = "macos")]
 pub(crate) const DEFAULT_DPI: f64 = 72.0;
+#[cfg(not(target_os = "macos"))]
+pub(crate) const DEFAULT_DPI: f64 = 96.0;
 
 pub fn default_dpi() -> f64 {
     match Connection::get() {
@@ -110,6 +112,26 @@ pub enum MouseCursor {
     SizeLeftRight,
     /// Closed hand used while actively dragging something (e.g. reordering tabs).
     Grabbing,
+}
+
+/// The X11/Wayland backends keep upstream WezTerm's full `CursorIcon`
+/// glyph machinery; Kaku's `WindowOps::set_cursor` speaks `MouseCursor`,
+/// so translate at the backend boundary.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub use cursor_icon::CursorIcon;
+
+#[cfg(all(unix, not(target_os = "macos")))]
+impl MouseCursor {
+    pub(crate) fn to_cursor_icon(self) -> CursorIcon {
+        match self {
+            Self::Arrow => CursorIcon::Default,
+            Self::Hand => CursorIcon::Pointer,
+            Self::Text => CursorIcon::Text,
+            Self::SizeUpDown => CursorIcon::NsResize,
+            Self::SizeLeftRight => CursorIcon::EwResize,
+            Self::Grabbing => CursorIcon::Grabbing,
+        }
+    }
 }
 
 /// Represents the preferred appearance of the windowing

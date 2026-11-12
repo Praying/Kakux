@@ -657,6 +657,11 @@ impl CommandDef {
     }
 
     /// Rebuild the macOS menubar from the current config and key bindings.
+    /// Linux has no global menubar; commands stay reachable through the
+    /// command palette and key assignments, so a rebuild is a no-op.
+    #[cfg(not(target_os = "macos"))]
+    pub fn recreate_menubar(_config: &ConfigHandle) {}
+
     /// Called synchronously at startup and again on the main thread after a
     /// config reload. Every item Kaku adds carries `KAKU_MENU_ITEM_TAG`; a
     /// rebuild removes those and inserts the new set at the top of each
@@ -2300,13 +2305,19 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
                   line-editor undo (zsh ZLE / bash readline) without \
                   interfering with full-screen TUI apps like vim."
                 .into(),
-            keys: if text == "\x1f" {
+            keys: {
                 #[cfg(target_os = "macos")]
                 {
-                    vec![(Modifiers::SUPER, "z".into())]
+                    if text == "\x1f" {
+                        vec![(Modifiers::SUPER, "z".into())]
+                    } else {
+                        vec![]
+                    }
                 }
-            } else {
-                vec![]
+                #[cfg(not(target_os = "macos"))]
+                {
+                    vec![]
+                }
             },
             args: &[],
             menubar: &[],
@@ -2889,6 +2900,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn ctrl_chords_stay_with_the_shell_on_macos() {
         // Kaku binds its shortcuts on Cmd. The WezTerm-era Ctrl copies took
         // chords that shells and TUIs own (Ctrl+_ is readline/zsh undo,

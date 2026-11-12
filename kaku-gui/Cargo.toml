@@ -22,7 +22,8 @@ name = "k"
 path = "src/bin/k.rs"
 
 [features]
-default = ["vendored-fonts", "remote"]
+default = ["vendored-fonts", "remote", "wayland"]
+wayland = ["window/wayland"]
 distro-defaults = ["config/distro-defaults"]
 vendor-nerd-font-symbols-font = ["wezterm-font/vendor-nerd-font-symbols"]
 vendor-jetbrains-font = ["wezterm-font/vendor-jetbrains"]
@@ -126,6 +127,12 @@ window.workspace = true
 [target.'cfg(target_os="macos")'.dependencies]
 cocoa.workspace = true
 objc.workspace = true
+
+# The workspace pins wgpu to the Metal backend for macOS; Linux needs
+# Vulkan/GLES for the WebGpu front end. Adding features here never
+# affects the macOS build because this section is not evaluated there.
+[target.'cfg(all(unix, not(target_os="macos")))'.dependencies]
+wgpu = { workspace = true, features = ["vulkan", "gles"] }
 
 [dev-dependencies]
 benchmarking.workspace = true

@@ -505,22 +505,49 @@ fn pin_to_interface(socket: &UdpSocket, index: u32) {
     if index == 0 {
         return;
     }
-    let value = index as libc::c_int;
-    // SAFETY: the fd belongs to `socket`, and the option takes a c_int.
-    let set = unsafe {
-        libc::setsockopt(
-            socket.as_raw_fd(),
-            libc::IPPROTO_IP,
-            libc::IP_BOUND_IF,
-            (&value as *const libc::c_int).cast(),
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        )
-    };
-    if set != 0 {
-        log::info!(
-            "kaku-remote p2p: cannot pin a socket to its interface: {}",
-            std::io::Error::last_os_error()
-        );
+    #[cfg(target_os = "macos")]
+    {
+        let value = index as libc::c_int;
+        // SAFETY: the fd belongs to `socket`, and the option takes a c_int.
+        let set = unsafe {
+            libc::setsockopt(
+                socket.as_raw_fd(),
+                libc::IPPROTO_IP,
+                libc::IP_BOUND_IF,
+                (&value as *const libc::c_int).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        if set != 0 {
+            log::info!(
+                "kaku-remote p2p: cannot pin a socket to its interface: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Linux's equivalent of macOS's IP_BOUND_IF: route the socket's
+        // outgoing packets through the given interface so a TUN-mode proxy
+        // cannot carry them. The kernel takes (and reports back) the
+        // interface index as a 4-byte integer in network byte order.
+        let value: libc::c_int = (index as libc::c_int).to_be();
+        // SAFETY: the fd belongs to `socket`, and the option takes a c_int.
+        let set = unsafe {
+            libc::setsockopt(
+                socket.as_raw_fd(),
+                libc::IPPROTO_IP,
+                libc::IP_UNICAST_IF,
+                (&value as *const libc::c_int).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        if set != 0 {
+            log::info!(
+                "kaku-remote p2p: cannot pin a socket to its interface: {}",
+                std::io::Error::last_os_error()
+            );
+        }
     }
 }
 
@@ -924,21 +951,41 @@ mod tests {
         for socket in &sockets.sockets {
             let local = socket.local_addr().unwrap().ip();
             let &(_, index) = ips.iter().find(|(ip, _)| *ip == local).unwrap();
-            let mut value: libc::c_int = 0;
-            let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
-            // SAFETY: reads one c_int option from a socket this test owns.
-            let got = unsafe {
-                libc::getsockopt(
-                    socket.as_raw_fd(),
-                    libc::IPPROTO_IP,
-                    libc::IP_BOUND_IF,
-                    (&mut value as *mut libc::c_int).cast(),
-                    &mut len,
-                )
+            #[cfg(target_os = "macos")]
+            let (got, value) = {
+                let mut value: libc::c_int = 0;
+                let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+                // SAFETY: reads one c_int option from a socket this test owns.
+                let got = unsafe {
+                    libc::getsockopt(
+                        socket.as_raw_fd(),
+                        libc::IPPROTO_IP,
+                        libc::IP_BOUND_IF,
+                        (&mut value as *mut libc::c_int).cast(),
+                        &mut len,
+                    )
+                };
+                (got, value as u32)
+            };
+            #[cfg(not(target_os = "macos"))]
+            let (got, value) = {
+                let mut value: libc::c_int = 0;
+                let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+                // SAFETY: reads one c_int option from a socket this test owns.
+                let got = unsafe {
+                    libc::getsockopt(
+                        socket.as_raw_fd(),
+                        libc::IPPROTO_IP,
+                        libc::IP_UNICAST_IF,
+                        (&mut value as *mut libc::c_int).cast(),
+                        &mut len,
+                    )
+                };
+                (got, u32::from_be(value as u32))
             };
             assert_eq!(got, 0);
             assert_ne!(index, 0);
-            assert_eq!(value as u32, index, "{local} is not pinned");
+            assert_eq!(value, index, "{local} is not pinned");
         }
     }
 

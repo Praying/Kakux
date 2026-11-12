@@ -7,10 +7,15 @@ use std::fmt::Display;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[cfg(target_os = "macos")]
 pub mod core_text;
+#[cfg(all(unix, not(target_os = "macos")))]
+pub mod font_config;
 
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum FontOrigin {
+    FontConfig,
+    FontConfigMatch(String),
     CoreText,
     FontDirs,
     BuiltIn,
@@ -214,6 +219,7 @@ pub fn new_locator(locator: FontLocatorSelection) -> Arc<dyn FontLocator + Send 
     match locator {
         // fontconfig is not on macOS; a config shared with a Linux WezTerm
         // setup may still ask for it, which used to panic.
+        #[cfg(target_os = "macos")]
         FontLocatorSelection::FontConfig | FontLocatorSelection::CoreText => {
             if locator == FontLocatorSelection::FontConfig {
                 log::warn!(
@@ -223,6 +229,17 @@ pub fn new_locator(locator: FontLocatorSelection) -> Arc<dyn FontLocator + Send 
             Arc::new(core_text::CoreTextFontLocator {
                 parsed_cache: Default::default(),
             })
+        }
+        // CoreText is not available on Linux; a macOS config may still
+        // ask for it, so fall back to fontconfig instead of panicking.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        FontLocatorSelection::FontConfig | FontLocatorSelection::CoreText => {
+            if locator == FontLocatorSelection::CoreText {
+                log::warn!(
+                    "font_locator = \"CoreText\" is not available on this platform; using fontconfig"
+                );
+            }
+            Arc::new(font_config::FontConfigFontLocator {})
         }
         FontLocatorSelection::ConfigDirsOnly => Arc::new(NopSystemSource {}),
     }

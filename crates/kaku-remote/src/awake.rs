@@ -36,6 +36,18 @@ impl Drop for Awake {
     }
 }
 
+/// Linux has no App Nap; nothing to hold.
+#[cfg(not(target_os = "macos"))]
+mod platform {
+    pub(super) struct Activity(());
+
+    pub(super) fn begin() -> Option<Activity> {
+        None
+    }
+
+    pub(super) fn end(_activity: Activity) {}
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use objc2::rc::Retained;

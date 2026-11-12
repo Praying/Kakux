@@ -1113,6 +1113,11 @@ impl GuiFrontEnd {
         {
             self.hotkey_window.borrow().mux_window_id == Some(id)
         }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = id;
+            false
+        }
     }
 
     pub fn workspace_has_ordinary_windows(&self, workspace: &str) -> bool {

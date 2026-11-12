@@ -193,6 +193,7 @@ impl TermWindow {
 
     /// Gives a context menu taller rows when a long press opened it; a
     /// mouse right click keeps the system size.
+    #[cfg(target_os = "macos")]
     pub(super) fn size_menu_for_touch(&self, menu: &window::os::macos::menu::Menu) {
         if self.mouse.menu_from_long_press {
             menu.set_row_height(LONG_PRESS_MENU_ROW_PT);

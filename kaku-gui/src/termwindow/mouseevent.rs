@@ -262,6 +262,8 @@ fn bottom_tab_bar_touch_extension_px(touch_mode: bool, dpi: usize) -> isize {
     }
     #[cfg(target_os = "macos")]
     let base_dpi: usize = 72;
+    #[cfg(not(target_os = "macos"))]
+    let base_dpi: usize = 96;
     (BOTTOM_TAB_BAR_TOUCH_EXTENSION_PT * dpi / base_dpi).max(BOTTOM_TAB_BAR_TOUCH_EXTENSION_PT)
         as isize
 }
@@ -1953,6 +1955,8 @@ impl super::TermWindow {
 
         #[cfg(target_os = "macos")]
         let base_dpi: usize = 72;
+        #[cfg(not(target_os = "macos"))]
+        let base_dpi: usize = 96;
         let resize_zone_pt: usize = 5;
         let resize_zone =
             (resize_zone_pt * self.dimensions.dpi / base_dpi).max(resize_zone_pt) as isize;
@@ -3083,11 +3087,20 @@ mod tests {
         );
         assert_eq!(bottom_tab_bar_touch_y(999, 1000, 1000, mouse), None);
 
-        let touch = bottom_tab_bar_touch_extension_px(true, 144);
+        let touch = bottom_tab_bar_touch_extension_px(
+            true,
+            if cfg!(target_os = "macos") { 144 } else { 192 },
+        );
         assert_eq!(touch, 24, "12pt at 2x");
         assert_eq!(bottom_tab_bar_touch_y(976, 1020, 1000, touch), Some(1020));
         assert_eq!(bottom_tab_bar_touch_y(975, 1020, 1000, touch), None);
-        assert_eq!(bottom_tab_bar_touch_extension_px(true, 72), 12);
+        assert_eq!(
+            bottom_tab_bar_touch_extension_px(
+                true,
+                if cfg!(target_os = "macos") { 72 } else { 96 }
+            ),
+            12
+        );
     }
 
     #[test]

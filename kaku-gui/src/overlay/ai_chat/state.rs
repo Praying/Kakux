@@ -637,6 +637,21 @@ fn app_is_active() -> bool {
     }
 }
 
+/// Wayland/X11 have no application-activity concept: focus belongs to each
+/// window. The GUI updates this flag on every FocusChanged event, and an
+/// unfocused window's task notification still fires while another Kaku
+/// window has focus only if that window also reports blurred focus in the
+/// meantime (a harmless extra notification).
+#[cfg(not(target_os = "macos"))]
+pub(crate) static APP_WINDOW_FOCUSED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(not(target_os = "macos"))]
+fn app_is_active() -> bool {
+    use std::sync::atomic::Ordering;
+    APP_WINDOW_FOCUSED.load(Ordering::Relaxed)
+}
+
 fn send_unfocused_notification(title: &str, body: &str) {
     if app_is_active() {
         return;

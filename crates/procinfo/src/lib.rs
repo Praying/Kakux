@@ -6,6 +6,9 @@ use std::path::PathBuf;
 #[cfg(feature = "lua")]
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
 mod macos;
 
 #[derive(Debug, Copy, Clone)]

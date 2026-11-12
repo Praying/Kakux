@@ -22,7 +22,8 @@ impl ResetCommand {
     }
 }
 
-#[cfg(target_os = "macos")]
+/// The reset logic (zshrc/fish conf.d/tmux lines, git config, kaku.lua theme
+/// block, state.json) is platform-neutral and runs on every unix.
 mod imp {
     use super::*;
     use crate::shell::{

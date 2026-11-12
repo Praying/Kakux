@@ -26,6 +26,20 @@ mod unix {
 
     impl NameHolder {
         fn compute_name(class_name: &str) -> String {
+            #[cfg(not(target_os = "macos"))]
+            {
+                let config = config::configuration();
+                if config.enable_wayland {
+                    if let Ok(wayland) = std::env::var("WAYLAND_DISPLAY") {
+                        return format!("wayland-{}-{}", wayland, class_name);
+                    }
+                    // We don't assume a default WAYLAND_DISPLAY here because
+                    // we don't know if the default should be used or if we
+                    // should fall back to X11 without connecting to wayland.
+                }
+                let x11 = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+                return format!("x11-{}-{}", x11, class_name);
+            }
             #[cfg(target_os = "macos")]
             {
                 format!("default-{}", class_name)

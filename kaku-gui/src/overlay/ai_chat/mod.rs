@@ -13,7 +13,7 @@ mod waza;
 mod input;
 mod layout;
 mod render;
-mod state;
+pub(crate) mod state;
 mod types;
 
 // Vocabulary used in this overlay (see also `kaku-gui/AGENTS.md`):

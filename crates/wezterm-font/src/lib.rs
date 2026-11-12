@@ -49,6 +49,9 @@ use wezterm_toast_notification::ToastNotification;
 
 mod hbwrap;
 
+#[cfg(all(unix, not(target_os = "macos")))]
+pub mod fcwrap;
+
 pub mod db;
 pub mod ftwrap;
 pub mod locator;
@@ -485,6 +488,11 @@ impl FallbackResolveInfo {
 #[cfg(target_os = "macos")]
 fn with_fallback_autorelease_pool<T>(f: impl FnOnce() -> T) -> T {
     objc::rc::autoreleasepool(f)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn with_fallback_autorelease_pool<T>(f: impl FnOnce() -> T) -> T {
+    f()
 }
 
 /// The caption font is the window frame font scaled down, 14pt to 11pt with

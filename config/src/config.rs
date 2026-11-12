@@ -3847,9 +3847,15 @@ fn default_status_update_interval() -> u64 {
 }
 
 fn default_quit_when_all_windows_are_closed() -> bool {
+    // On macOS windows hide on close and the app lives in the Dock;
+    // elsewhere the standard behavior is to quit with the last window.
     #[cfg(target_os = "macos")]
     {
         false
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
     }
 }
 

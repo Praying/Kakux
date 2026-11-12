@@ -1,4 +1,6 @@
 use config::{configuration, Config, ConfigHandle};
+#[cfg(not(target_os = "macos"))]
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use wezterm_term::color::{ColorPalette, SrgbaTuple};
@@ -23,9 +25,7 @@ struct CachedTheme {
 }
 
 static THEME_CACHE: Mutex<Option<(usize, CachedTheme)>> = Mutex::new(None);
-#[cfg(target_os = "macos")]
 static APPEARANCE_CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
-#[cfg(target_os = "macos")]
 const APPEARANCE_CACHE_TTL: Duration = Duration::from_secs(1);
 
 fn rgb(hex: &str) -> SrgbaTuple {
@@ -213,7 +213,7 @@ fn builtin_kaku_theme(config: &Config) -> Option<CachedTheme> {
             //       'Kaku Dark'.
             // Disambiguate by checking the raw config file.
             if config_file_has_auto_color_scheme(config) {
-                let is_dark = is_macos_dark_mode();
+                let is_dark = is_os_dark_mode();
                 if is_dark {
                     return Some(appearance_sensitive_theme(dark, true));
                 } else {
@@ -332,6 +332,76 @@ fn is_macos_dark_mode() -> bool {
     is_dark
 }
 
+/// Whether the desktop environment currently prefers a dark appearance.
+#[cfg(target_os = "macos")]
+fn is_os_dark_mode() -> bool {
+    is_os_dark_mode()
+}
+
+/// Detects dark mode on Linux desktops, checking KDE first (the bundled
+/// appearance package), then GNOME's gsettings value, then the GTK settings
+/// file. Returns false when nothing indicates a dark preference.
+#[cfg(not(target_os = "macos"))]
+fn is_os_dark_mode() -> bool {
+    let now = Instant::now();
+    let mut cache = APPEARANCE_CACHE.lock().unwrap();
+    if let Some((checked_at, is_dark)) = *cache {
+        if now.duration_since(checked_at) < APPEARANCE_CACHE_TTL {
+            return is_dark;
+        }
+    }
+
+    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var_os("HOME").unwrap_or_default();
+            PathBuf::from(home).join(".config")
+        });
+
+    let mut is_dark = false;
+
+    // KDE stores the active look-and-feel package name; dark packages carry
+    // "dark" in the name.
+    if let Ok(package) = std::fs::read_to_string(config_home.join("kdedefaults/package")) {
+        if package.to_ascii_lowercase().contains("dark") {
+            is_dark = true;
+        }
+    }
+
+    if !is_dark {
+        if let Ok(out) = std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+            .output()
+        {
+            if out.status.success()
+                && String::from_utf8_lossy(&out.stdout)
+                    .to_ascii_lowercase()
+                    .contains("dark")
+            {
+                is_dark = true;
+            }
+        }
+    }
+
+    if !is_dark {
+        for gtk_version in ["gtk-4.0", "gtk-3.0"] {
+            let ini = config_home.join(gtk_version).join("settings.ini");
+            if let Ok(content) = std::fs::read_to_string(&ini) {
+                if content.lines().any(|l| {
+                    l.trim()
+                        .eq_ignore_ascii_case("gtk-application-prefer-dark-theme=1")
+                }) {
+                    is_dark = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    *cache = Some((now, is_dark));
+    is_dark
+}
+
 fn theme_from_config(config: &ConfigHandle) -> CachedTheme {
     if let Some(theme) = builtin_kaku_theme(config) {
         return theme;
@@ -409,7 +479,7 @@ fn current_theme() -> CachedTheme {
     let mut cached = THEME_CACHE.lock().unwrap();
     if let Some((cached_generation, theme)) = *cached {
         let current_appearance_is_dark = if theme.appearance_sensitive {
-            Some(is_macos_dark_mode())
+            Some(is_os_dark_mode())
         } else {
             None
         };

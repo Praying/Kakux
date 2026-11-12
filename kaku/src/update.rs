@@ -15,6 +15,21 @@ impl UpdateCommand {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
+mod imp {
+    use super::*;
+
+    pub fn run(_yes: bool) -> anyhow::Result<()> {
+        bail!(
+            "kaku update is not supported on this platform yet; \
+             update through your package manager or rebuild from source"
+        );
+    }
+}
+
+/// Self-update is macOS-only for now: the apply path is built around the
+/// Kaku.app bundle (ditto, codesign, launchd handoff) and has no Linux
+/// packaging story yet. On Linux, point users at their package manager.
 #[cfg(target_os = "macos")]
 mod imp {
     use super::*;

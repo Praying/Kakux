@@ -600,6 +600,8 @@ impl TextStyle {
         // without relying on async font discovery to come back in time.
         #[cfg(target_os = "macos")]
         let emoji_fallback = FontAttributes::new_fallback("Apple Color Emoji");
+        #[cfg(not(target_os = "macos"))]
+        let emoji_fallback = FontAttributes::new_fallback("Noto Color Emoji");
         if !font.iter().any(|f| *f == emoji_fallback) {
             font.push(emoji_fallback);
         }
@@ -671,16 +673,25 @@ impl Default for AllowSquareGlyphOverflow {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
 pub enum FontLocatorSelection {
-    /// fontconfig is not available on macOS. Kept so configs shared with a
-    /// Linux WezTerm setup still load; it behaves as CoreText.
+    /// Use fontconfig APIs to resolve fonts (non-macOS posix systems).
+    /// On macOS it behaves as CoreText.
     FontConfig,
-    /// Use CoreText on macOS
-    #[default]
+    /// Use CoreText on macOS. On other platforms it behaves as FontConfig.
     CoreText,
     /// Use only the font_dirs configuration to locate fonts
     ConfigDirsOnly,
+}
+
+impl Default for FontLocatorSelection {
+    fn default() -> Self {
+        if cfg!(target_os = "macos") {
+            FontLocatorSelection::CoreText
+        } else {
+            FontLocatorSelection::FontConfig
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, FromDynamic, ToDynamic, Default)]
