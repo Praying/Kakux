@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use super::kaku_frame::KakuFrame;
 use anyhow::{anyhow, bail};
 use async_io::Timer;
 use async_trait::async_trait;
@@ -28,7 +29,6 @@ use smithay_client_toolkit::reexports::csd_frame::{
 };
 use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
 use smithay_client_toolkit::seat::pointer::CursorIcon;
-use smithay_client_toolkit::shell::xdg::fallback_frame::FallbackFrame;
 use smithay_client_toolkit::shell::xdg::window::{
     DecorationMode, Window as XdgWindow, WindowConfigure, WindowDecorations as Decorations,
     WindowHandler,
@@ -190,7 +190,7 @@ impl WaylandWindow {
         name: &str,
         geometry: RequestedWindowGeometry,
         config: Option<&ConfigHandle>,
-        _font_config: Rc<FontConfiguration>,
+        font_config: Rc<FontConfiguration>,
         event_handler: F,
     ) -> anyhow::Result<Window>
     where
@@ -241,40 +241,51 @@ impl WaylandWindow {
 
         let window = {
             let xdg_shell = &conn.wayland_state.borrow().xdg;
-            let initial_decorations =
-                if !config.window_decorations.contains(WindowDecorations::TITLE) {
-                    Decorations::None
-                } else {
-                    Decorations::RequestServer
-                };
+            // The self-drawn, config-themed titlebar is the default; the
+            // compositor's server-side titlebar is only requested when
+            // KAKU_WAYLAND_SSD=1 asks for it (a debugging escape hatch).
+            let prefer_ssd = std::env::var_os("KAKU_WAYLAND_SSD").is_some_and(|v| v == "1");
+            let has_title = config.window_decorations.contains(WindowDecorations::TITLE);
+            let initial_decorations = if !has_title {
+                Decorations::None
+            } else if prefer_ssd {
+                Decorations::RequestServer
+            } else {
+                Decorations::ClientOnly
+            };
             xdg_shell.create_window(surface.clone(), initial_decorations, &qh)
         };
 
         window.set_app_id(class_name.to_string());
         window.set_title(name.to_string());
 
-        let decor_mode = if !config.window_decorations.contains(WindowDecorations::TITLE) {
-            None
-        } else if config.window_decorations == WindowDecorations::default() {
+        let prefer_ssd = std::env::var_os("KAKU_WAYLAND_SSD").is_some_and(|v| v == "1");
+        let has_title = config.window_decorations.contains(WindowDecorations::TITLE);
+        let use_csd = has_title && !prefer_ssd;
+        // With ClientOnly the decoration object is never bound, so this
+        // request only carries weight on the SSD escape hatch.
+        window.request_decoration_mode(if has_title && prefer_ssd {
             Some(DecorationMode::Server)
         } else {
-            Some(DecorationMode::Client)
-        };
-        window.request_decoration_mode(decor_mode);
+            None
+        });
 
         let mut window_frame = {
             let wayland_state = &conn.wayland_state.borrow();
             let shm = &wayland_state.shm;
             let subcompositor = wayland_state.subcompositor.clone();
-            FallbackFrame::new(&window, shm, subcompositor, qh.clone())
-                .expect("failed to create csd frame")
+            KakuFrame::new(
+                &window,
+                shm,
+                subcompositor,
+                qh.clone(),
+                Some(font_config.clone()),
+            )
+            .expect("failed to create csd frame")
         };
-        let hidden = match decor_mode {
-            Some(DecorationMode::Client) => false,
-            _ => true,
-        };
-        window_frame.set_hidden(hidden);
-        if !hidden {
+        window_frame.set_title(name.to_string());
+        window_frame.set_hidden(!use_csd);
+        if use_csd {
             window_frame.resize(
                 NonZeroU32::new(dimensions.pixel_width as u32)
                     .ok_or_else(|| anyhow!("dimensions {dimensions:?} are invalid"))?,
@@ -606,7 +617,7 @@ pub struct WaylandWindowInner {
     pub(crate) events: WindowEventSender,
     surface_factor: f64,
     window: Option<XdgWindow>,
-    pub(super) window_frame: FallbackFrame<WaylandState>,
+    pub(super) window_frame: KakuFrame<WaylandState>,
     dimensions: Dimensions,
     resize_increments: Option<ResizeIncrement>,
     window_state: WindowState,
@@ -1107,6 +1118,7 @@ impl WaylandWindowInner {
         if let Some(window) = self.window.as_ref() {
             window.set_title(title.clone());
         }
+        self.window_frame.set_title(title.clone());
         self.refresh_frame();
         self.title = Some(title);
     }
@@ -1329,6 +1341,10 @@ impl WaylandWindowInner {
     fn config_did_change(&mut self, config: ConfigHandle) {
         self.config = config;
         self.update_window_background_blur();
+        // The frame colors are read from the config at draw time, so a
+        // reload must mark it dirty to pick up the new theme.
+        self.window_frame.set_dirty();
+        self.refresh_frame();
     }
 
     fn update_window_background_blur(&mut self) {
