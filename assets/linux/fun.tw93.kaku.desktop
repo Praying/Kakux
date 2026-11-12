@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Kaku
+GenericName=Terminal
+Comment=An AI-friendly terminal
+Exec=@EXEC@
+Icon=fun.tw93.kaku
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;kaku;
+StartupWMClass=fun.tw93.kaku
+SingleMainWindow=true
