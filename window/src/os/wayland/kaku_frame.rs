@@ -242,12 +242,13 @@ where
 
     /// Shape the title with the terminal's title font, tinting monochrome
     /// glyphs with the active titlebar foreground color. Ported from the
-    /// Shape the title with the terminal's title font and scale every glyph
-    /// into the header's own pixel space.
+    /// Shape the title with the terminal's own font and scale every glyph
+    /// into the header's own pixel space, so the titlebar matches the
+    /// terminal's typeface.
     ///
-    /// The font stack sizes the title font from the *terminal's* dpi, which
-    /// also carries the terminal font scale; the header buffer instead lives
-    /// in `HEADER_SIZE * surface_scale` pixels. On macOS those coincide, but
+    /// The font stack sizes fonts from the *terminal's* dpi, which also
+    /// carries the terminal font scale; the header buffer instead lives in
+    /// `HEADER_SIZE * surface_scale` pixels. On macOS those coincide, but
     /// elsewhere they can differ by 2x or more, which once drew the glyphs
     /// twice as tall as the header and mostly above the canvas. Scaling the
     /// rasterized bitmaps here makes the drawn title a fixed fraction of the
@@ -272,10 +273,13 @@ where
             }
         }
 
-        let font = match font_config.title_font() {
+        // Use the terminal's primary font (with its fallback chain), not
+        // the window_frame title font, so the titlebar is set in the same
+        // typeface as the terminal content.
+        let font = match font_config.default_font() {
             Ok(font) => font,
             Err(err) => {
-                log::warn!("unable to load title font: {err:#}");
+                log::warn!("unable to load font for the title: {err:#}");
                 self.shaped_title = None;
                 return;
             }
@@ -305,13 +309,13 @@ where
             colors.inactive_fg
         };
 
-        // Aim the font's cell height at ~45% of the header bar, scaled by
+        // Aim the font's cell height at ~60% of the header bar, scaled by
         // the user's window_frame.font_size preference (12 is the default),
         // and clamped so an oversized preference cannot leave the header.
         let font_config_handle = font_config.config();
         let size_factor = font_config_handle.window_frame.font_size.unwrap_or(12.) as f32 / 12.;
-        let max_cell_px = HEADER_SIZE as f32 * scale as f32 * 0.7;
-        let target_px = (HEADER_SIZE as f32 * scale as f32 * 0.45 * size_factor).min(max_cell_px);
+        let max_cell_px = HEADER_SIZE as f32 * scale as f32 * 0.75;
+        let target_px = (HEADER_SIZE as f32 * scale as f32 * 0.6 * size_factor).min(max_cell_px);
         let cell_px = metrics.cell_height.get() as f32;
         let ratio = if cell_px > 0. {
             target_px / cell_px
