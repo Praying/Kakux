@@ -4959,6 +4959,30 @@ config.inactive_pane_hsb = {
 config.swallow_mouse_click_on_pane_focus = true
 config.swallow_mouse_click_on_window_focus = true
 
+-- ===== Linux Pane Focus =====
+-- Alt+Arrows move focus between split panes, alongside the Cmd+Opt+Arrows
+-- bindings above. On macOS nothing changes: Alt+Arrows stay with the shell
+-- (word jumps / directory history in fish).
+if not wezterm.target_triple:find('darwin', 1, true) then
+  config.keys = config.keys or {}
+  table.insert(config.keys, {
+    key = 'LeftArrow', mods = 'ALT',
+    action = wezterm.action.ActivatePaneDirection('Left'),
+  })
+  table.insert(config.keys, {
+    key = 'RightArrow', mods = 'ALT',
+    action = wezterm.action.ActivatePaneDirection('Right'),
+  })
+  table.insert(config.keys, {
+    key = 'UpArrow', mods = 'ALT',
+    action = wezterm.action.ActivatePaneDirection('Up'),
+  })
+  table.insert(config.keys, {
+    key = 'DownArrow', mods = 'ALT',
+    action = wezterm.action.ActivatePaneDirection('Down'),
+  })
+end
+
 -- ===== First Run Experience & Config Version Check =====
 wezterm.on('gui-startup', function(cmd)
   lazygit_hint_warmup_until_secs = now_secs() + lazygit_hint_startup_grace_secs
