@@ -2123,6 +2123,13 @@ impl TermWindow {
             }
             crate::startup_trace::mark("  TermWindow::created done");
             myself.subscribe_to_pane_updates();
+            // Build the tab bar from the mux as it exists right now. The
+            // first build otherwise waits for a focus or status event, and
+            // for a session-restored window those can race the restore's
+            // tab adds: the notifications fire before this subscription
+            // exists, so the bar would keep showing the first restored
+            // tab only.
+            myself.update_title();
             crate::startup_trace::mark("  emit window-config-reloaded start");
             myself.emit_window_event("window-config-reloaded", None);
             crate::startup_trace::mark("  emit window-config-reloaded done");
@@ -2811,6 +2818,12 @@ impl TermWindow {
                             tab.resize(self.terminal_size);
                         }
                     }
+                    // The tab bar must show the new tab even when no pane
+                    // focus follows it: session restore adds its tabs
+                    // without focusing their panes, so the usual
+                    // PaneFocused -> update_title chain never fires and
+                    // the bar kept showing the pre-restore tab set.
+                    self.update_title_post_status();
                 }
                 MuxNotification::PaneOutput(pane_id) => {
                     if self.pane_output_changes_display(pane_id) {
