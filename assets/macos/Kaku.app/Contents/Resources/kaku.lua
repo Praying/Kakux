@@ -3939,44 +3939,52 @@ local function build_font_config(is_light)
   local base_weight = is_light and 'Medium' or 'Regular'
   local bold_weight = is_light and 'SemiBold' or 'Medium'
 
-  local font = wezterm.font_with_fallback({
-    { family = 'JetBrains Mono', weight = base_weight },
+  -- macOS keeps the JetBrains Mono stack with its system fallbacks; other
+  -- platforms use Monaco Nerd Font. Monaco ships a single Regular weight,
+  -- so the theme-dependent weights are macOS-only and bold text renders at
+  -- Regular there (color still marks it via bold_brightens_ansi_colors).
+  local primary_family = 'JetBrains Mono'
+  local primary_weight = base_weight
+  local primary_fallbacks = {
     { family = 'PingFang SC', weight = base_weight },
     'Apple Symbols',
     'Apple Color Emoji',
-  })
+  }
+  if not wezterm.target_triple:find('darwin', 1, true) then
+    primary_family = 'Monaco Nerd Font'
+    primary_weight = 'Regular'
+    primary_fallbacks = {
+      { family = 'Noto Sans Mono CJK SC', weight = 'Regular' },
+      'Noto Color Emoji',
+    }
+  end
+
+  local function stack(spec)
+    local list = { spec }
+    for _, fallback in ipairs(primary_fallbacks) do
+      table.insert(list, fallback)
+    end
+    return wezterm.font_with_fallback(list)
+  end
+
+  local font = stack({ family = primary_family, weight = primary_weight })
 
   local font_rules = {
     -- Prevent thin weight: use base weight instead of Light for Half intensity
     {
       intensity = 'Half',
-      font = wezterm.font_with_fallback({
-        { family = 'JetBrains Mono', weight = base_weight },
-        { family = 'PingFang SC', weight = base_weight },
-        'Apple Symbols',
-        'Apple Color Emoji',
-      }),
+      font = stack({ family = primary_family, weight = primary_weight }),
     },
     -- Normal italic: disable real italics (keep upright)
     {
       intensity = 'Normal',
       italic = true,
-      font = wezterm.font_with_fallback({
-        { family = 'JetBrains Mono', weight = base_weight, italic = false },
-        { family = 'PingFang SC', weight = base_weight },
-        'Apple Symbols',
-        'Apple Color Emoji',
-      }),
+      font = stack({ family = primary_family, weight = primary_weight, italic = false }),
     },
     -- Bold: use heavier weight
     {
       intensity = 'Bold',
-      font = wezterm.font_with_fallback({
-        { family = 'JetBrains Mono', weight = bold_weight },
-        { family = 'PingFang SC', weight = bold_weight },
-        'Apple Symbols',
-        'Apple Color Emoji',
-      }),
+      font = stack({ family = primary_family, weight = bold_weight }),
     },
   }
 
