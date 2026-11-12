@@ -769,6 +769,22 @@ where
         let width = width.get();
         let height = height.get();
 
+        if self.state.contains(WindowState::FULLSCREEN) {
+            // Nothing is drawn in fullscreen, but the compositor derives the
+            // window's extent from the whole surface tree: frame parts left
+            // at their decorated positions would stick out beyond the
+            // screen and make it scale the window down to fit, cutting the
+            // bottom rows. Collapse every part inside the main surface.
+            for part in parts.iter_mut() {
+                part.pos = (0, 0);
+                part.width = 1;
+                part.height = 1;
+            }
+            self.dirty = true;
+            self.should_sync = true;
+            return;
+        }
+
         parts[HEADER].width = width;
 
         parts[TOP_BORDER].width = width + 2 * BORDER_SIZE;
@@ -837,8 +853,13 @@ where
         let should_sync = mem::take(&mut self.should_sync);
 
         if self.state.contains(WindowState::FULLSCREEN) {
-            // Don't draw the decorations for the full screen surface.
-            for part in &self.render_data.as_ref().unwrap().parts {
+            // Don't draw the decorations for the full screen surface, and
+            // keep the (bufferless) parts positioned inside the main
+            // surface so the compositor does not enlarge the window's
+            // extent beyond the screen.
+            let parts = &self.render_data.as_ref().unwrap().parts;
+            for part in parts {
+                part.subsurface.set_position(0, 0);
                 part.surface.attach(None, 0, 0);
                 part.surface.commit();
             }
