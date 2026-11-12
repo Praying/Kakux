@@ -558,6 +558,9 @@ pub struct Config {
     pub use_fancy_tab_bar: bool,
 
     #[dynamic(default)]
+    pub vertical_tab_bar: bool,
+
+    #[dynamic(default)]
     pub tab_bar_at_bottom: bool,
 
     /// If true, auto-generated tab titles use only the current folder name
@@ -2399,6 +2402,26 @@ mod tests {
     fn hotkey_overrides(source: &str) -> wezterm_dynamic::Value {
         let lua = mlua::Lua::new();
         luahelper::lua_value_to_dynamic(lua.load(source).eval().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn vertical_tab_bar_is_additive_and_supports_window_overrides() {
+        let defaults = hotkey_fixture("return {}", &Default::default(), false);
+        assert!(!defaults.vertical_tab_bar);
+        let sidebar = hotkey_fixture(
+            "return {vertical_tab_bar=true,use_fancy_tab_bar=false,tab_bar_at_bottom=true}",
+            &Default::default(),
+            false,
+        );
+        assert!(sidebar.vertical_tab_bar);
+        assert!(!sidebar.use_fancy_tab_bar);
+        let overrides = hotkey_overrides(
+            "return {vertical_tab_bar=false,use_fancy_tab_bar=true,tab_bar_at_bottom=false}",
+        );
+        let horizontal = hotkey_fixture("return {vertical_tab_bar=true}", &overrides, false);
+        assert!(!horizontal.vertical_tab_bar);
+        assert!(horizontal.use_fancy_tab_bar);
+        assert!(!horizontal.tab_bar_at_bottom);
     }
 
     fn assert_hotkey_padding(config: &super::Config, expected: [f32; 4]) {

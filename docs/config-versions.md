@@ -18,6 +18,8 @@ instruction files; read the txt file instead.
 
 ## History
 
+Unreleased: `vertical_tab_bar` is an additive boolean (default `false`), so it needs no migration of existing configuration. Linux bundled defaults now select the drawn top bar; explicit `use_fancy_tab_bar` and `tab_bar_at_bottom` overrides remain supported. The layout switch changes only window-local overrides. The next release still follows the version-bump gate below.
+
 | Version | Release | Change |
 |---|---|---|
 | v21 | - | Adds `smart_tab_mode`. Introduces the optional `SmartPrompt` value for `window_close_confirmation` (the bundled default later flipped to `SmartPrompt` so a stateful pane is no longer dropped silently on Cmd+Q). Accepts the removed `language` option as a deprecated field for backward compat. |

@@ -60,4 +60,11 @@ if ! file_contains_literal 'config_version.txt' "$KAKU_LUA"; then
 	exit 1
 fi
 
+if ! file_contains_literal 'config.vertical_tab_bar = false' "$KAKU_LUA" \
+	|| ! file_contains_literal 'pub vertical_tab_bar: bool' config/src/config.rs \
+	|| ! file_contains_literal 'config.vertical_tab_bar = true' docs/configuration.md; then
+	echo "Expected vertical tab defaults, schema and documentation to agree" >&2
+	exit 1
+fi
+
 echo "Config release readiness passed for version $config_version"

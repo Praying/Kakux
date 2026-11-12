@@ -4237,10 +4237,18 @@ config.smart_tab_mode = 'suggestion_first'
 config.enable_tab_bar = true
 config.tab_bar_at_bottom = true
 config.use_fancy_tab_bar = false
+config.vertical_tab_bar = false
+if not wezterm.target_triple:find('darwin', 1, true) then
+  config.tab_bar_at_bottom = false
+  config.use_fancy_tab_bar = true
+end
 config.tab_max_width = 48
 config.tab_title_show_foreground_process = false
 config.tab_title_use_pane_title = false
 config.hide_tab_bar_if_only_one_tab = true
+if not wezterm.target_triple:find('darwin', 1, true) then
+  config.hide_tab_bar_if_only_one_tab = false
+end
 config.show_tab_index_in_tab_bar = false
 config.show_new_tab_button_in_tab_bar = true
 

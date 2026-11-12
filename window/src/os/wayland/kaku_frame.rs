@@ -38,7 +38,9 @@ use wayland_backend::client::ObjectId;
 use wezterm_font::{FontConfiguration, FontMetrics, GlyphInfo, RasterizedGlyph};
 
 /// The size of the header bar.
-const HEADER_SIZE: u32 = 30;
+const HEADER_SIZE: u32 = 36;
+const BUTTON_WIDTH: u32 = 34;
+const BUTTON_MARGIN: u32 = 6;
 
 /// The size of the border.
 const BORDER_SIZE: u32 = 6;
@@ -94,6 +96,7 @@ pub struct KakuFrame<State> {
 
     /// Buttons state.
     buttons: [Option<UIButton>; 3],
+    pressed_button: Option<UIButton>,
 
     /// The terminal font configuration, used to shape the title.
     font_config: Option<Rc<FontConfiguration>>,
@@ -135,6 +138,7 @@ where
     /// Force a redraw on the next refresh, e.g. after the config (and with
     /// it the window_frame theme) changed.
     pub fn set_dirty(&mut self) {
+        self.shaped_title = None;
         self.dirty = true;
     }
 
@@ -165,6 +169,7 @@ where
             mouse_location: Location::None,
             mouse_coords: (0, 0),
             buttons: Self::supported_buttons(wm_capabilities),
+            pressed_button: None,
             font_config,
             title: String::new(),
             shaped_title: None,
@@ -216,19 +221,7 @@ where
     }
 
     fn find_button(buttons: &[Option<UIButton>], x: f64, y: f64, w: u32) -> Location {
-        for (idx, &button) in buttons.iter().flatten().enumerate() {
-            let idx = idx as u32;
-            if w >= (idx + 1) * HEADER_SIZE
-                && x >= f64::from(w - (idx + 1) * HEADER_SIZE)
-                && x <= f64::from(w - idx * HEADER_SIZE)
-                && y <= f64::from(HEADER_SIZE)
-                && y >= f64::from(0)
-            {
-                return Location::Button(button);
-            }
-        }
-
-        Location::Head
+        hit_button(buttons, x, y, w).map_or(Location::Head, Location::Button)
     }
 
     #[inline]
@@ -315,7 +308,7 @@ where
         let font_config_handle = font_config.config();
         let size_factor = font_config_handle.window_frame.font_size.unwrap_or(12.) as f32 / 12.;
         let max_cell_px = HEADER_SIZE as f32 * scale as f32 * 0.75;
-        let target_px = (HEADER_SIZE as f32 * scale as f32 * 0.6 * size_factor).min(max_cell_px);
+        let target_px = (18. * scale as f32 * size_factor).min(max_cell_px);
         let cell_px = metrics.cell_height.get() as f32;
         let ratio = if cell_px > 0. {
             target_px / cell_px
@@ -404,7 +397,14 @@ where
     /// centered in the region left of the buttons: baseline at 3/4 of the
     /// header height, adjusted by the (already scaled) descender and
     /// per-glyph offsets. All glyph metrics are in header-buffer pixels.
-    fn draw_title(canvas: &mut [u8], width: u32, height: u32, scale: u32, shaped: &ShapedTitle) {
+    fn draw_title(
+        canvas: &mut [u8],
+        width: u32,
+        height: u32,
+        scale: u32,
+        shaped: &ShapedTitle,
+        button_count: usize,
+    ) {
         let Some(mut pixmap) = PixmapMut::from_bytes(canvas, width * scale, height * scale) else {
             return;
         };
@@ -412,7 +412,8 @@ where
         // The buttons occupy the rightmost button-count header cells; keep a
         // symmetric 8px margin on both sides of the usable title region.
         let left_margin = 8. * scale_f;
-        let right_reserve = 3. * HEADER_SIZE as f32 * scale_f + 8. * scale_f;
+        let right_reserve =
+            (button_count as f32 * BUTTON_WIDTH as f32 + BUTTON_MARGIN as f32 + 8.) * scale_f;
         let usable = (width as f32 * scale_f - left_margin - right_reserve).max(0.);
         // Measure how much of the title fits, then center it in the region.
         let mut fitted = 0f32;
@@ -425,7 +426,13 @@ where
         let mut x: f32 = left_margin + (usable - fitted) / 2.;
         let paint = PixmapPaint::default();
         for item in &shaped.glyphs {
+            if x + item.x_advance > left_margin + usable {
+                break;
+            }
             let gx = x + item.x_offset + item.bearing_x;
+            if gx + item.width as f32 > left_margin + usable {
+                break;
+            }
             let gy = height as f32 * scale_f * 3. / 4. + shaped.descender
                 - (item.y_offset + item.bearing_y);
             if std::env::var_os("KAKU_FRAME_DEBUG").is_some() {
@@ -458,127 +465,151 @@ where
             }
         }
     }
+}
 
-    /// Draw themed buttons into the header canvas: hover-highlighted
-    /// squares with the separator line below the header.
-    fn draw_buttons(
-        buttons: &[Option<UIButton>],
-        canvas: &mut [u8],
-        width: u32,
-        height: u32,
-        scale: u32,
-        is_active: bool,
-        mouse_location: &Location,
-        colors: &ThemedColors,
-    ) {
-        let scale = scale as usize;
-        // The separator line between header and window contents.
-        let sep = premultiply(if is_active {
-            colors.active_separator
+fn button_left(width: u32, index: usize) -> Option<u32> {
+    width.checked_sub(BUTTON_MARGIN + (index as u32 + 1) * BUTTON_WIDTH)
+}
+
+fn hit_button(buttons: &[Option<UIButton>], x: f64, y: f64, width: u32) -> Option<UIButton> {
+    if !(0. ..HEADER_SIZE as f64).contains(&y) {
+        return None;
+    }
+    buttons
+        .iter()
+        .flatten()
+        .enumerate()
+        .find_map(|(index, &button)| {
+            let left = button_left(width, index)? as f64;
+            (x >= left && x < left + BUTTON_WIDTH as f64).then_some(button)
+        })
+}
+
+fn released_button(pressed: &mut Option<UIButton>, location: Location) -> Option<UIButton> {
+    let previous = pressed.take()?;
+    (location == Location::Button(previous)).then_some(previous)
+}
+
+fn draw_buttons(
+    buttons: &[Option<UIButton>],
+    canvas: &mut [u8],
+    width: u32,
+    height: u32,
+    scale: u32,
+    state: WindowState,
+    location: Location,
+    pressed: Option<UIButton>,
+    colors: &ThemedColors,
+) {
+    use tiny_skia::{LineCap, Paint, PathBuilder, Stroke};
+    let Some(mut pixmap) = PixmapMut::from_bytes(canvas, width * scale, height * scale) else {
+        return;
+    };
+    let transform = Transform::from_scale(scale as f32, scale as f32);
+    let active = state.contains(WindowState::ACTIVATED);
+    let color_paint = |color: RgbaColor| {
+        let (red, green, blue, alpha) = color.as_rgba_u8();
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(blue, green, red, alpha);
+        paint
+    };
+    let separator = if active {
+        colors.active_separator
+    } else {
+        colors.inactive_separator
+    };
+    if let Some(rect) = tiny_skia::Rect::from_xywh(0., height as f32 - 1., width as f32, 1.) {
+        pixmap.fill_rect(rect, &color_paint(separator), transform, None);
+    }
+    for (index, &button) in buttons.iter().flatten().enumerate() {
+        let Some(left) = button_left(width, index) else {
+            continue;
+        };
+        let center_x = left as f32 + BUTTON_WIDTH as f32 / 2.;
+        let center_y = HEADER_SIZE as f32 / 2.;
+        let hovered = location == Location::Button(button);
+        let foreground = if hovered {
+            colors.button_hover_fg
+        } else if active {
+            colors.active_fg
         } else {
-            colors.inactive_separator
-        });
-        let line_y = height as usize * scale - scale;
-        for pixel in canvas
-            [line_y * width as usize * scale * 4..(line_y + 1) * width as usize * scale * 4]
-            .chunks_exact_mut(4)
-        {
-            pixel[0] = sep[0];
-            pixel[1] = sep[1];
-            pixel[2] = sep[2];
-            pixel[3] = sep[3];
-        }
-
-        for (idx, &button) in buttons.iter().flatten().enumerate() {
-            if width < (idx + 1) as u32 * HEADER_SIZE {
-                continue;
-            }
-            let hovered = is_active
-                && matches!((mouse_location, button), (Location::Button(b), _) if *b == button);
-            let (bg, fg) = if hovered {
-                (colors.button_hover_bg, colors.button_hover_fg)
-            } else if is_active {
-                (colors.active_bg, colors.active_fg)
+            colors.inactive_fg
+        };
+        let (red, green, blue, _) = foreground.as_rgba_u8();
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(blue, green, red, if active { 24 } else { 12 });
+        if hovered {
+            paint = if button == UIButton::Close {
+                let mut danger = Paint::default();
+                danger.set_color_rgba8(81, 72, 220, 255);
+                danger
             } else {
-                (colors.inactive_bg, colors.inactive_fg)
+                color_paint(colors.button_hover_bg)
             };
-
-            let x_start = width as usize * scale - (idx + 1) * HEADER_SIZE as usize * scale;
-            let h = HEADER_SIZE as usize * scale;
-
-            let bg = premultiply(bg);
-            for y in 0..h {
-                let row = &mut canvas[(x_start + y * width as usize * scale) * 4
-                    ..(x_start + y * width as usize * scale + h) * 4];
-                for pixel in row.chunks_exact_mut(4) {
-                    pixel[0] = bg[0];
-                    pixel[1] = bg[1];
-                    pixel[2] = bg[2];
-                    pixel[3] = bg[3];
-                }
+        }
+        if let Some(circle) = PathBuilder::from_circle(
+            center_x,
+            center_y,
+            if pressed == Some(button) && hovered {
+                11.
+            } else {
+                12.
+            },
+        ) {
+            pixmap.fill_path(
+                &circle,
+                &paint,
+                tiny_skia::FillRule::Winding,
+                transform,
+                None,
+            );
+        }
+        let mut path = PathBuilder::new();
+        match button {
+            UIButton::Close => {
+                path.move_to(center_x - 3.5, center_y - 3.5);
+                path.line_to(center_x + 3.5, center_y + 3.5);
+                path.move_to(center_x + 3.5, center_y - 3.5);
+                path.line_to(center_x - 3.5, center_y + 3.5);
             }
-
-            let fg = premultiply(fg);
-            let cx = x_start + h / 2;
-            let cy = h / 2;
-            let stroke = (scale as f32 * 1.5).ceil() as usize;
-            match button {
-                UIButton::Close => {
-                    // An X
-                    for d in -((h / 4) as i32)..=(h / 4) as i32 {
-                        for s in -(stroke as i32 / 2)..=(stroke as i32 / 2) {
-                            for (dx, dy) in [(d + s, d), (d + s, -d)] {
-                                let x = cx as i32 + dx;
-                                let y = cy as i32 + dy;
-                                if x >= 0
-                                    && y >= 0
-                                    && (x as usize) < width as usize * scale
-                                    && (y as usize) < h
-                                {
-                                    let idx =
-                                        (y as usize * width as usize * scale + x as usize) * 4;
-                                    canvas[idx] = fg[0];
-                                    canvas[idx + 1] = fg[1];
-                                    canvas[idx + 2] = fg[2];
-                                    canvas[idx + 3] = fg[3];
-                                }
-                            }
-                        }
-                    }
-                }
-                UIButton::Maximize => {
-                    // A square outline
-                    let r = h / 5;
-                    for y in cy - r..cy + r {
-                        for x in cx - r..cx + r {
-                            let edge = (y - (cy - r)) < stroke
-                                || ((cy + r) - 1 - y) < stroke
-                                || (x - (cx - r)) < stroke
-                                || ((cx + r) - 1 - x) < stroke;
-                            if edge {
-                                let idx = (y * width as usize * scale + x) * 4;
-                                canvas[idx] = fg[0];
-                                canvas[idx + 1] = fg[1];
-                                canvas[idx + 2] = fg[2];
-                                canvas[idx + 3] = fg[3];
-                            }
-                        }
-                    }
-                }
-                UIButton::Minimize => {
-                    // An underline
-                    let underline_y = cy + h / 4;
-                    for y in underline_y..underline_y + stroke {
-                        for x in cx - h / 4..cx + h / 4 {
-                            let idx = (y * width as usize * scale + x) * 4;
-                            canvas[idx] = fg[0];
-                            canvas[idx + 1] = fg[1];
-                            canvas[idx + 2] = fg[2];
-                            canvas[idx + 3] = fg[3];
-                        }
-                    }
-                }
+            UIButton::Minimize => {
+                path.move_to(center_x - 4., center_y);
+                path.line_to(center_x + 4., center_y);
             }
+            UIButton::Maximize => {
+                if state.contains(WindowState::MAXIMIZED) {
+                    path.move_to(center_x - 1., center_y - 4.);
+                    path.line_to(center_x + 4., center_y - 4.);
+                    path.line_to(center_x + 4., center_y + 1.);
+                    path.move_to(center_x - 4., center_y - 1.);
+                    path.line_to(center_x + 1., center_y - 1.);
+                    path.line_to(center_x + 1., center_y + 4.);
+                    path.line_to(center_x - 4., center_y + 4.);
+                } else {
+                    path.move_to(center_x - 3.5, center_y - 3.5);
+                    path.line_to(center_x + 3.5, center_y - 3.5);
+                    path.line_to(center_x + 3.5, center_y + 3.5);
+                    path.line_to(center_x - 3.5, center_y + 3.5);
+                }
+                path.close();
+            }
+        }
+        if let Some(path) = path.finish() {
+            let mut ink = color_paint(foreground);
+            if hovered && button == UIButton::Close {
+                ink.set_color_rgba8(255, 255, 255, 255);
+            }
+            pixmap.stroke_path(
+                &path,
+                &ink,
+                &Stroke {
+                    width: 1.35,
+                    line_cap: LineCap::Round,
+                    ..Stroke::default()
+                },
+                transform,
+                None,
+            );
         }
     }
 }
@@ -654,21 +685,33 @@ where
             };
         }
 
+        if click != FrameClick::Normal {
+            return None;
+        }
+        self.dirty = true;
+        if pressed {
+            self.pressed_button = match self.mouse_location {
+                Location::Button(button) => Some(button),
+                _ => None,
+            };
+        } else {
+            let button = released_button(&mut self.pressed_button, self.mouse_location)?;
+            return match button {
+                UIButton::Close => Some(FrameAction::Close),
+                UIButton::Minimize => Some(FrameAction::Minimize),
+                UIButton::Maximize if self.resizable => {
+                    Some(if self.state.contains(WindowState::MAXIMIZED) {
+                        FrameAction::UnMaximize
+                    } else {
+                        FrameAction::Maximize
+                    })
+                }
+                _ => None,
+            };
+        }
         let resize = pressed && self.resizable;
         match self.mouse_location {
             Location::Head if pressed => Some(FrameAction::Move),
-            Location::Button(UIButton::Close) if !pressed => Some(FrameAction::Close),
-            Location::Button(UIButton::Minimize) if !pressed => Some(FrameAction::Minimize),
-            Location::Button(UIButton::Maximize)
-                if !pressed && !self.state.contains(WindowState::MAXIMIZED) =>
-            {
-                Some(FrameAction::Maximize)
-            }
-            Location::Button(UIButton::Maximize)
-                if !pressed && self.state.contains(WindowState::MAXIMIZED) =>
-            {
-                Some(FrameAction::UnMaximize)
-            }
             Location::Top if resize => Some(FrameAction::Resize(ResizeEdge::Top)),
             Location::TopLeft if resize => Some(FrameAction::Resize(ResizeEdge::TopLeft)),
             Location::Left if resize => Some(FrameAction::Resize(ResizeEdge::Left)),
@@ -727,6 +770,7 @@ where
 
     fn click_point_left(&mut self) {
         self.mouse_location = Location::None;
+        self.pressed_button = None;
         self.dirty = true;
     }
 
@@ -749,6 +793,12 @@ where
 
     fn set_resizable(&mut self, resizable: bool) {
         self.resizable = resizable;
+        self.buttons = Self::supported_buttons(self.wm_capabilities);
+        if !resizable {
+            self.buttons[1] = None;
+        }
+        self.pressed_button = None;
+        self.dirty = true;
     }
 
     fn update_state(&mut self, state: WindowState) {
@@ -904,16 +954,24 @@ where
             // Draw the title and buttons into the header.
             if idx == HEADER {
                 if let Some(shaped) = self.shaped_title.as_ref() {
-                    Self::draw_title(&mut canvas, part.width, HEADER_SIZE, scale as u32, shaped);
+                    Self::draw_title(
+                        &mut canvas,
+                        part.width,
+                        HEADER_SIZE,
+                        scale as u32,
+                        shaped,
+                        self.buttons.iter().flatten().count(),
+                    );
                 }
-                Self::draw_buttons(
+                draw_buttons(
                     &self.buttons,
                     &mut canvas,
                     part.width,
                     HEADER_SIZE,
                     scale as u32,
-                    is_active,
-                    &self.mouse_location,
+                    self.state,
+                    self.mouse_location,
+                    self.pressed_button,
                     &colors,
                 );
             }
@@ -947,6 +1005,10 @@ where
         self.dirty |= self.wm_capabilities != capabilities;
         self.wm_capabilities = capabilities;
         self.buttons = Self::supported_buttons(capabilities);
+        if !self.resizable {
+            self.buttons[1] = None;
+        }
+        self.pressed_button = None;
     }
 
     fn set_title(&mut self, title: impl Into<String>) {
@@ -1096,4 +1158,109 @@ enum UIButton {
     Maximize,
     /// The close botton, the right most.
     Close,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BUTTONS: [Option<UIButton>; 3] = [
+        Some(UIButton::Close),
+        Some(UIButton::Maximize),
+        Some(UIButton::Minimize),
+    ];
+
+    #[test]
+    fn button_hit_regions_match_drawing_and_do_not_overlap() {
+        for width in 1..400 {
+            for (index, button) in BUTTONS.iter().flatten().enumerate() {
+                if let Some(left) = button_left(width, index) {
+                    assert_eq!(hit_button(&BUTTONS, left as f64, 18., width), Some(*button));
+                    assert_eq!(
+                        hit_button(&BUTTONS, (left + BUTTON_WIDTH - 1) as f64, 18., width),
+                        Some(*button)
+                    );
+                    assert_eq!(hit_button(&BUTTONS, left as f64, -1., width), None);
+                    assert_eq!(
+                        hit_button(&BUTTONS, left as f64, HEADER_SIZE as f64, width),
+                        None
+                    );
+                }
+            }
+            assert_eq!(hit_button(&BUTTONS, width as f64, 18., width), None);
+        }
+    }
+
+    #[test]
+    fn missing_capabilities_compact_the_buttons() {
+        let buttons = [Some(UIButton::Close), None, Some(UIButton::Minimize)];
+        let left = button_left(300, 1).unwrap() as f64;
+        assert_eq!(
+            hit_button(&buttons, left, 18., 300),
+            Some(UIButton::Minimize)
+        );
+    }
+
+    #[test]
+    fn release_requires_a_matching_press_and_consumes_it() {
+        let mut pressed = None;
+        assert_eq!(
+            released_button(&mut pressed, Location::Button(UIButton::Close)),
+            None
+        );
+        pressed = Some(UIButton::Minimize);
+        assert_eq!(
+            released_button(&mut pressed, Location::Button(UIButton::Close)),
+            None
+        );
+        assert_eq!(pressed, None);
+        pressed = Some(UIButton::Close);
+        assert_eq!(released_button(&mut pressed, Location::Head), None);
+        pressed = Some(UIButton::Close);
+        assert_eq!(
+            released_button(&mut pressed, Location::Button(UIButton::Close)),
+            Some(UIButton::Close)
+        );
+        assert_eq!(
+            released_button(&mut pressed, Location::Button(UIButton::Close)),
+            None
+        );
+    }
+
+    #[test]
+    fn button_raster_handles_tiny_surfaces_and_changes_restore_icon() {
+        let colors = themed_colors();
+        for scale in [1, 2, 3] {
+            for width in [1, 24, 40, 80, 300] {
+                let mut canvas = vec![0; (width * HEADER_SIZE * scale * scale * 4) as usize];
+                draw_buttons(
+                    &BUTTONS,
+                    &mut canvas,
+                    width,
+                    HEADER_SIZE,
+                    scale,
+                    WindowState::ACTIVATED,
+                    Location::None,
+                    None,
+                    &colors,
+                );
+                let normal = canvas.clone();
+                canvas.fill(0);
+                draw_buttons(
+                    &BUTTONS,
+                    &mut canvas,
+                    width,
+                    HEADER_SIZE,
+                    scale,
+                    WindowState::ACTIVATED | WindowState::MAXIMIZED,
+                    Location::None,
+                    None,
+                    &colors,
+                );
+                if width >= 80 {
+                    assert_ne!(normal, canvas);
+                }
+            }
+        }
+    }
 }

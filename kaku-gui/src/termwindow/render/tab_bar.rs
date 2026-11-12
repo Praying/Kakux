@@ -22,6 +22,15 @@ impl crate::TermWindow {
     }
 
     pub fn paint_tab_bar(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
+        if self.workspace_tabs_enabled() {
+            if self.fancy_tab_bar.is_none() {
+                let palette = self.palette().clone();
+                self.fancy_tab_bar = Some(self.build_workspace_tabs(&palette)?);
+            }
+            let mut items = self.paint_fancy_tab_bar()?;
+            self.ui_items.append(&mut items);
+            return Ok(());
+        }
         let tab_bar_height = self.tab_bar_pixel_height()?;
         let tab_bar_y = self.tab_bar_y(tab_bar_height);
         let panes = self.get_panes_to_render();
@@ -180,7 +189,11 @@ impl crate::TermWindow {
         fontconfig: &wezterm_font::FontConfiguration,
         render_metrics: &RenderMetrics,
     ) -> anyhow::Result<f32> {
-        if config.use_fancy_tab_bar {
+        if config.vertical_tab_bar {
+            Ok(0.)
+        } else if !cfg!(target_os = "macos") && config.use_fancy_tab_bar {
+            Ok(40. * fontconfig.get_dpi() as f32 / 96.)
+        } else if config.use_fancy_tab_bar {
             let font = fontconfig.title_font()?;
             Ok((font.metrics().cell_height.get() as f32 * 1.75).ceil())
         } else {
@@ -199,7 +212,11 @@ impl crate::TermWindow {
         config: &ConfigHandle,
         render_metrics: &RenderMetrics,
     ) -> f32 {
-        if config.use_fancy_tab_bar {
+        if config.vertical_tab_bar {
+            0.
+        } else if !cfg!(target_os = "macos") && config.use_fancy_tab_bar {
+            40. * config.dpi.unwrap_or(96.) as f32 / 96.
+        } else if config.use_fancy_tab_bar {
             // Mirror tab_bar_pixel_height_impl's fancy-path formula, but use
             // the terminal cell height as a stand-in for the title font cell
             // height. The two differ by ~1-2 pixels in typical configs.

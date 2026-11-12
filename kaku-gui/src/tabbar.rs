@@ -472,7 +472,11 @@ fn build_default_title(
     let mut len = 0;
     let mut title = title.to_string();
 
-    let classic_spacing = if config.use_fancy_tab_bar { "" } else { " " };
+    let classic_spacing = if config.use_fancy_tab_bar || config.vertical_tab_bar {
+        ""
+    } else {
+        " "
+    };
     if with_tab_index && config.show_tab_index_in_tab_bar {
         let index = format!("{classic_spacing}{}: ", tab_display_index(tab, config));
         len += unicode_column_width(&index, None);
@@ -482,7 +486,7 @@ fn build_default_title(
 
     if with_edge_padding {
         title = format!(" {} ", title);
-    } else if !config.use_fancy_tab_bar {
+    } else if !(config.use_fancy_tab_bar || config.vertical_tab_bar) {
         while len + unicode_column_width(&title, None) < 5 {
             title.push(' ');
         }
@@ -919,13 +923,13 @@ impl TabBarState {
         line: &mut Line,
         colors: &TabBarColors,
     ) {
-        let default_cell = if config.use_fancy_tab_bar {
+        let default_cell = if config.use_fancy_tab_bar || config.vertical_tab_bar {
             CellAttributes::default()
         } else {
             colors.new_tab().as_cell_attributes()
         };
 
-        let default_cell_hover = if config.use_fancy_tab_bar {
+        let default_cell_hover = if config.use_fancy_tab_bar || config.vertical_tab_bar {
             CellAttributes::default()
         } else {
             colors.new_tab_hover().as_cell_attributes()
@@ -1025,7 +1029,7 @@ impl TabBarState {
 
         let new_tab = parse_status_text(
             &config.tab_bar_style.new_tab,
-            if config.use_fancy_tab_bar {
+            if config.use_fancy_tab_bar || config.vertical_tab_bar {
                 CellAttributes::default()
             } else {
                 new_tab_attrs.clone()
@@ -1033,7 +1037,7 @@ impl TabBarState {
         );
         let new_tab_hover = parse_status_text(
             &config.tab_bar_style.new_tab_hover,
-            if config.use_fancy_tab_bar {
+            if config.use_fancy_tab_bar || config.vertical_tab_bar {
                 CellAttributes::default()
             } else {
                 new_tab_hover_attrs.clone()
@@ -1073,7 +1077,8 @@ impl TabBarState {
         };
         // Touch Mode keeps cells at the end of every tab for a drawn close
         // button; the retro bar has no hover to reveal one.
-        let close_cells = if close_buttons && !config.use_fancy_tab_bar {
+        let close_cells = if close_buttons && !(config.use_fancy_tab_bar || config.vertical_tab_bar)
+        {
             CLOSE_BUTTON_CELLS
         } else {
             0
@@ -1083,7 +1088,7 @@ impl TabBarState {
             controls_width + close_cells * number_of_tabs,
             number_of_tabs,
             config.tab_max_width,
-            config.use_fancy_tab_bar,
+            config.use_fancy_tab_bar || config.vertical_tab_bar,
         );
         let tab_title_max_width_for_callback = if tab_width_max == usize::MAX {
             config.tab_max_width.max(1)
@@ -1105,7 +1110,7 @@ impl TabBarState {
 
         if use_integrated_title_buttons
             && config.integrated_title_button_style == IntegratedTitleButtonStyle::MacOsNative
-            && !config.use_fancy_tab_bar
+            && !(config.use_fancy_tab_bar || config.vertical_tab_bar)
             && !config.tab_bar_at_bottom
             && !is_fullscreen
         {
@@ -1207,7 +1212,7 @@ impl TabBarState {
                 format_as_escapes(tab_title.items.clone()).expect("already parsed ok above");
             let mut tab_line = parse_status_text(
                 &esc,
-                if config.use_fancy_tab_bar {
+                if config.use_fancy_tab_bar || config.vertical_tab_bar {
                     CellAttributes::default()
                 } else {
                     cell_attrs.clone()
@@ -1248,7 +1253,7 @@ impl TabBarState {
                 esc = format_as_escapes(tab_title.items.clone()).expect("already parsed ok above");
                 tab_line = parse_status_text(
                     &esc,
-                    if config.use_fancy_tab_bar {
+                    if config.use_fancy_tab_bar || config.vertical_tab_bar {
                         CellAttributes::default()
                     } else {
                         cell_attrs.clone()

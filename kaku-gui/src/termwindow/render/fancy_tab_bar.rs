@@ -31,7 +31,7 @@ const X_BUTTON: &[Poly] = &[
     },
 ];
 
-const PLUS_BUTTON: &[Poly] = &[
+pub(super) const PLUS_BUTTON: &[Poly] = &[
     Poly {
         path: &[
             PolyCommand::MoveTo(BlockCoord::Frac(1, 2), BlockCoord::Zero),
@@ -478,7 +478,7 @@ impl crate::TermWindow {
             let computed = self.fancy_tab_bar.as_mut().ok_or_else(|| {
                 anyhow::anyhow!("paint_fancy_tab_bar called but fancy_tab_bar is None")
             })?;
-            apply_tab_offsets(computed, &tab_offsets);
+            apply_tab_offsets(computed, &tab_offsets, self.config.vertical_tab_bar);
         }
 
         // Now borrow immutably for rendering
@@ -499,7 +499,7 @@ impl crate::TermWindow {
                 .map(|(&idx, &offset)| (idx, -offset))
                 .collect();
             if let Some(computed) = self.fancy_tab_bar.as_mut() {
-                apply_tab_offsets(computed, &reverse_offsets);
+                apply_tab_offsets(computed, &reverse_offsets, self.config.vertical_tab_bar);
             }
         }
 
@@ -508,7 +508,7 @@ impl crate::TermWindow {
     }
 }
 
-fn make_x_button(
+pub(super) fn make_x_button(
     font: &Rc<LoadedFont>,
     metrics: &RenderMetrics,
     colors: &TabBarColors,
@@ -572,21 +572,30 @@ fn make_x_button(
 fn apply_tab_offsets(
     element: &mut super::super::box_model::ComputedElement,
     offsets: &std::collections::HashMap<usize, f32>,
+    vertical: bool,
 ) {
     use crate::tabbar::TabBarItem;
     use crate::termwindow::UIItemType;
 
     // Check if this element is a tab
-    if let Some(UIItemType::TabBar(TabBarItem::Tab { tab_idx, .. })) = &element.item_type {
+    if let Some(
+        UIItemType::TabBar(TabBarItem::Tab { tab_idx, .. }) | UIItemType::CloseTab(tab_idx),
+    ) = &element.item_type
+    {
         if let Some(&offset) = offsets.get(tab_idx) {
-            element.translate(euclid::vec2(offset, 0.0));
+            element.translate(if vertical {
+                euclid::vec2(0., offset)
+            } else {
+                euclid::vec2(offset, 0.)
+            });
         }
+        return;
     }
 
     // Recurse into children
     if let super::super::box_model::ComputedElementContent::Children(kids) = &mut element.content {
         for kid in kids {
-            apply_tab_offsets(kid, offsets);
+            apply_tab_offsets(kid, offsets, vertical);
         }
     }
 }

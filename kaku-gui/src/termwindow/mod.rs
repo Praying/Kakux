@@ -757,6 +757,7 @@ pub enum TermWindowNotif {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UIItemType {
     TabBar(TabBarItem),
+    TabBarControl(render::workspace_tabs::TabControl),
     CloseTab(usize),
     AboveScrollThumb,
     ScrollThumb,
@@ -1812,7 +1813,7 @@ impl TermWindow {
         let integrated_top_inset = crate::termwindow::render::borders::integrated_buttons_top_inset(
             &config,
             initial_window_state,
-            show_tab_bar && !config.tab_bar_at_bottom,
+            show_tab_bar && !config.tab_bar_at_bottom && !config.vertical_tab_bar,
             dpi as f32,
         );
         if integrated_top_inset > 0 {
@@ -1820,6 +1821,11 @@ impl TermWindow {
         }
 
         dimensions.pixel_height += (border.top + border.bottom).get() as usize;
+        border.left += ULength::new(render::workspace_tabs::sidebar_width(
+            config.vertical_tab_bar && show_tab_bar,
+            dimensions.pixel_width,
+            dpi,
+        ) as usize);
         dimensions.pixel_width += (border.left + border.right).get() as usize;
 
         crate::startup_trace::mark("    load_background_image start");

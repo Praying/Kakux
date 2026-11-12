@@ -80,7 +80,9 @@ impl crate::TermWindow {
         {
             let height = self.dimensions.pixel_height as f32;
             let width = self.dimensions.pixel_width as f32;
-            let top_tab_bar_visible = self.show_tab_bar && !self.config.tab_bar_at_bottom;
+            let top_tab_bar_visible = self.show_tab_bar
+                && !self.config.tab_bar_at_bottom
+                && !self.config.vertical_tab_bar;
             let integrated_top_inset = integrated_buttons_top_inset(
                 &self.config,
                 self.effective_layout_window_state(),
@@ -305,12 +307,14 @@ impl crate::TermWindow {
         let extra_top = integrated_buttons_top_inset(
             &self.config,
             self.effective_layout_window_state(),
-            self.show_tab_bar && !self.config.tab_bar_at_bottom,
+            self.show_tab_bar && !self.config.tab_bar_at_bottom && !self.config.vertical_tab_bar,
             self.dimensions.dpi as f32,
         );
         if extra_top > 0 {
             border.top += ULength::new(extra_top);
         }
+
+        border.left += ULength::new(self.tab_sidebar_width() as usize);
 
         border
     }

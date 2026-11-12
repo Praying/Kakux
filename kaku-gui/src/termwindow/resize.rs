@@ -1270,7 +1270,7 @@ fn effective_vertical_padding_with_policy(
     let is_edge_to_edge = window_state.contains(WindowState::MAXIMIZED);
     let base_top = config.window_padding.top.evaluate_as_pixels(context) as usize;
     let base_bottom = config.window_padding.bottom.evaluate_as_pixels(context) as usize;
-    let bottom_tab_visible = show_tab_bar && tab_bar_at_bottom;
+    let bottom_tab_visible = show_tab_bar && tab_bar_at_bottom && !config.vertical_tab_bar;
 
     // Explicit user padding is used as written; a bottom tab bar sits
     // inside it.
@@ -1292,7 +1292,7 @@ fn effective_vertical_padding_with_policy(
     let outer = effective_top_padding(base_top, default_top);
     let tab_bar_gap = outer / 2;
 
-    let top = if show_tab_bar && !tab_bar_at_bottom {
+    let top = if show_tab_bar && !tab_bar_at_bottom && !config.vertical_tab_bar {
         tab_bar_gap
     } else {
         outer

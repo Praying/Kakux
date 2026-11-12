@@ -586,7 +586,11 @@ impl super::TermWindow {
     fn drag_tab_target_idx(&self, current_tab_idx: usize, cursor_x: isize) -> Option<usize> {
         if let Some(prev_idx) = current_tab_idx.checked_sub(1) {
             if let Some(prev) = self.tab_ui_item(prev_idx) {
-                let prev_mid_x = prev.x as isize + prev.width as isize / 2;
+                let prev_mid_x = if self.config.vertical_tab_bar {
+                    prev.y as isize + prev.height as isize / 2
+                } else {
+                    prev.x as isize + prev.width as isize / 2
+                };
                 if cursor_x < prev_mid_x {
                     return Some(prev_idx);
                 }
@@ -595,7 +599,11 @@ impl super::TermWindow {
 
         if current_tab_idx < self.last_tab_index()? {
             if let Some(next) = self.tab_ui_item(current_tab_idx + 1) {
-                let next_mid_x = next.x as isize + next.width as isize / 2;
+                let next_mid_x = if self.config.vertical_tab_bar {
+                    next.y as isize + next.height as isize / 2
+                } else {
+                    next.x as isize + next.width as isize / 2
+                };
                 if cursor_x > next_mid_x {
                     return Some(current_tab_idx + 1);
                 }
@@ -687,9 +695,20 @@ impl super::TermWindow {
         context.set_cursor(Some(MouseCursor::Grabbing));
 
         // Update drag offset for real-time visual feedback
-        state.drag_offset_x = (event.coords.x - state.start_event.coords.x) as f32;
+        state.drag_offset_x = if self.config.vertical_tab_bar {
+            (event.coords.y - state.start_event.coords.y) as f32
+        } else {
+            (event.coords.x - state.start_event.coords.x) as f32
+        };
 
-        let target_idx = self.drag_tab_target_idx(state.tab_idx, event.coords.x);
+        let target_idx = self.drag_tab_target_idx(
+            state.tab_idx,
+            if self.config.vertical_tab_bar {
+                event.coords.y
+            } else {
+                event.coords.x
+            },
+        );
 
         if let Some(target_idx) = target_idx {
             if target_idx != state.tab_idx {
@@ -710,7 +729,11 @@ impl super::TermWindow {
                     state.tab_idx = target_idx;
                     // Adjust start_event.coords.x so drag_offset_x is relative to new position
                     if let Some(new_item) = self.tab_ui_item(target_idx) {
-                        state.start_event.coords.x = new_item.x as isize;
+                        if self.config.vertical_tab_bar {
+                            state.start_event.coords.y = new_item.y as isize;
+                        } else {
+                            state.start_event.coords.x = new_item.x as isize;
+                        }
                     }
                     context.invalidate();
                 }
@@ -738,7 +761,11 @@ impl super::TermWindow {
             return;
         };
 
-        let swap_distance = (new_item.x as f32 - old_item.x as f32).abs();
+        let swap_distance = if self.config.vertical_tab_bar {
+            (new_item.y as f32 - old_item.y as f32).abs()
+        } else {
+            (new_item.x as f32 - old_item.x as f32).abs()
+        };
 
         // After move_tab(), the displaced neighbor sits at old_idx. To make it
         // appear to slide from its old position (new_idx) toward old_idx:
@@ -840,6 +867,7 @@ impl super::TermWindow {
 
     fn leave_ui_item(&mut self, item: &UIItem) {
         match item.item_type {
+            UIItemType::TabBarControl(_) => {}
             UIItemType::TabBar(_) => {
                 self.update_title_post_status();
             }
@@ -853,6 +881,7 @@ impl super::TermWindow {
 
     fn enter_ui_item(&mut self, item: &UIItem) {
         match item.item_type {
+            UIItemType::TabBarControl(_) => {}
             UIItemType::TabBar(_) => {}
             UIItemType::CloseTab(_)
             | UIItemType::AboveScrollThumb
@@ -1502,6 +1531,36 @@ impl super::TermWindow {
     ) {
         self.mouse.last_ui_item.replace(item.clone());
         match item.item_type.clone() {
+            UIItemType::TabBarControl(action) => {
+                if matches!(event.kind, WMEK::Press(MousePress::Left)) {
+                    use super::render::workspace_tabs::TabControl;
+                    match action {
+                        TabControl::ToggleLayout => {
+                            self.config_overrides =
+                                super::render::workspace_tabs::toggle_layout_overrides(
+                                    &self.config_overrides,
+                                    self.config.vertical_tab_bar,
+                                );
+                            self.tab_drag_state = None;
+                            self.tab_position_animations.clear();
+                            self.config_was_reloaded();
+                        }
+                        TabControl::Previous | TabControl::Next => {
+                            let _ = self.activate_tab_relative(
+                                if action == TabControl::Previous {
+                                    -1
+                                } else {
+                                    1
+                                },
+                                true,
+                            );
+                        }
+                    }
+                    self.invalidate_fancy_tab_bar();
+                    context.invalidate();
+                }
+                context.set_cursor(Some(MouseCursor::Hand));
+            }
             UIItemType::TabBar(tab_bar_item) => {
                 self.mouse_event_tab_bar(tab_bar_item, item, event, context);
             }
@@ -1759,7 +1818,8 @@ impl super::TermWindow {
                 | TabBarItem::NewTabButton { .. } => {}
             },
             WMEK::VertWheel(n) => {
-                let scrolls_tabs = self.config.mouse_wheel_scrolls_tabs;
+                let scrolls_tabs =
+                    self.config.mouse_wheel_scrolls_tabs || self.workspace_tabs_enabled();
                 if scrolls_tabs {
                     if let Err(err) = self.activate_tab_relative(if n < 1 { 1 } else { -1 }, true) {
                         log::debug!("activate_tab_relative on wheel failed: {err:#}");

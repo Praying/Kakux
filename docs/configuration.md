@@ -241,6 +241,7 @@ Hidden when only one tab is open. Auto-generated tab titles show the current dir
 
 ```lua
 config.tab_bar_at_bottom = false                   -- move to top
+config.vertical_tab_bar = true                     -- use a left sidebar instead
 config.tab_title_show_basename_only = true         -- show "dirname" instead of "parent/dirname"
 config.tab_title_show_foreground_process = true    -- show "dirname·codex" while commands run
 config.tab_title_use_pane_title = true             -- show application titles set via OSC 0/2
@@ -248,6 +249,10 @@ config.show_tab_index_in_tab_bar = true            -- number tabs: "1:dirname", 
 ```
 
 `show_tab_index_in_tab_bar` (Settings: Tab Numbers) prefixes each tab with its position, so `Cmd + 1` through `Cmd + 8` select the tabs numbered 1 to 8. `Cmd + 9` always selects the last tab, whatever its number.
+
+On Linux the bundled defaults use a drawn, horizontal top bar. Click **Sidebar** to move tabs to the left; **Top tabs** switches back. This choice is per-window and does not edit your configuration. Set `config.vertical_tab_bar = true` to start new windows with a sidebar. Vertical tabs take priority over `tab_bar_at_bottom` and use drawn controls even with `use_fancy_tab_bar = false`. The sidebar keeps the active tab visible; the previous/next buttons navigate when tabs overflow. Both layouts retain drag reordering, middle-click close, double-click rename, and the existing close confirmation policy. macOS keeps its existing horizontal defaults and native window buttons.
+
+To retain the classic Linux layout, set `config.vertical_tab_bar = false`, `config.use_fancy_tab_bar = false`, and `config.tab_bar_at_bottom = true`. Set `config.hide_tab_bar_if_only_one_tab = false` to keep the layout switch available with one tab.
 
 With `tab_title_use_pane_title`, the active pane's title also supplies the window title and the title of a split tab. Explicit tab renames still take precedence. Shell prompt hooks may overwrite application titles after a command exits; this is independent of OSC support.
 
