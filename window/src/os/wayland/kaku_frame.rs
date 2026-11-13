@@ -51,6 +51,40 @@ const RIGHT_BORDER: usize = 2;
 const BOTTOM_BORDER: usize = 3;
 const LEFT_BORDER: usize = 4;
 
+/// The decorated layout of the five frame parts around a `width`x`height`
+/// main surface: `(pos, width, height)` per part, in surface-local logical
+/// coordinates. This is the single source of truth for the part geometry:
+/// `FrameRenderData::new` and the non-fullscreen `resize()` path both come
+/// here, so leaving fullscreen restores exactly the positions and sizes the
+/// parts were created with.
+fn decorated_part_geometry(width: u32, height: u32) -> [((i32, i32), u32, u32); 5] {
+    let border = BORDER_SIZE as i32;
+    let header = HEADER_SIZE as i32;
+    [
+        // Header: full width, sitting directly above the main surface.
+        ((0, -header), width, HEADER_SIZE),
+        // Top border: a header-height above the main surface, overlapping
+        // the side borders by BORDER_SIZE on each side.
+        ((-border, -header - border), width + 2 * BORDER_SIZE, BORDER_SIZE),
+        // Right border: right of the main surface, spanning the header.
+        ((width as i32, -header), BORDER_SIZE, height + HEADER_SIZE),
+        // Bottom border: below the main surface, spanning the side borders.
+        ((-border, height as i32), width + 2 * BORDER_SIZE, BORDER_SIZE),
+        // Left border: left of the main surface, spanning the header.
+        ((-border, -header), BORDER_SIZE, height + HEADER_SIZE),
+    ]
+}
+
+/// While fullscreen nothing is drawn, but the compositor derives the
+/// window's extent from the whole surface tree: parts left at their
+/// decorated positions stick out past the screen and make KWin scale the
+/// window down to fit, pushing the bottom rows below the screen edge.
+/// Collapsing every part to 1x1 at the origin keeps the tree's extent
+/// equal to the main surface.
+fn fullscreen_part_geometry() -> [((i32, i32), u32, u32); 5] {
+    [((0, 0), 1, 1); 5]
+}
+
 /// The frame state, themable through `config.window_frame`.
 pub struct KakuFrame<State> {
     /// The parent surface.
@@ -819,33 +853,16 @@ where
         let width = width.get();
         let height = height.get();
 
-        if self.state.contains(WindowState::FULLSCREEN) {
-            // Nothing is drawn in fullscreen, but the compositor derives the
-            // window's extent from the whole surface tree: frame parts left
-            // at their decorated positions would stick out beyond the
-            // screen and make it scale the window down to fit, cutting the
-            // bottom rows. Collapse every part inside the main surface.
-            for part in parts.iter_mut() {
-                part.pos = (0, 0);
-                part.width = 1;
-                part.height = 1;
-            }
-            self.dirty = true;
-            self.should_sync = true;
-            return;
+        let geometry = if self.state.contains(WindowState::FULLSCREEN) {
+            fullscreen_part_geometry()
+        } else {
+            decorated_part_geometry(width, height)
+        };
+        for (part, (pos, width, height)) in parts.iter_mut().zip(geometry) {
+            part.pos = pos;
+            part.width = width;
+            part.height = height;
         }
-
-        parts[HEADER].width = width;
-
-        parts[TOP_BORDER].width = width + 2 * BORDER_SIZE;
-
-        parts[BOTTOM_BORDER].width = width + 2 * BORDER_SIZE;
-        parts[BOTTOM_BORDER].pos.1 = height as i32;
-
-        parts[LEFT_BORDER].height = height + HEADER_SIZE;
-
-        parts[RIGHT_BORDER].height = parts[LEFT_BORDER].height;
-        parts[RIGHT_BORDER].pos.0 = width as i32;
 
         self.dirty = true;
         self.should_sync = true;
@@ -1037,46 +1054,18 @@ impl FrameRenderData {
     where
         State: Dispatch<WlSurface, SurfaceData> + Dispatch<WlSubsurface, SubsurfaceData> + 'static,
     {
-        let parts = [
-            // Header.
+        // The zero-sized decorated layout; the first resize() call fills in
+        // the real dimensions through the same geometry function.
+        let base = decorated_part_geometry(0, 0);
+        let parts: [FramePart; 5] = std::array::from_fn(|index| {
+            let (pos, width, height) = base[index];
             FramePart::new(
                 subcompositor.create_subsurface(parent.clone(), queue_handle),
-                0,
-                HEADER_SIZE,
-                (0, -(HEADER_SIZE as i32)),
-            ),
-            // Top border.
-            FramePart::new(
-                subcompositor.create_subsurface(parent.clone(), queue_handle),
-                0,
-                BORDER_SIZE,
-                (
-                    -(BORDER_SIZE as i32),
-                    -(HEADER_SIZE as i32 + BORDER_SIZE as i32),
-                ),
-            ),
-            // Right border.
-            FramePart::new(
-                subcompositor.create_subsurface(parent.clone(), queue_handle),
-                BORDER_SIZE,
-                0,
-                (0, -(HEADER_SIZE as i32)),
-            ),
-            // Bottom border.
-            FramePart::new(
-                subcompositor.create_subsurface(parent.clone(), queue_handle),
-                0,
-                BORDER_SIZE,
-                (-(BORDER_SIZE as i32), 0),
-            ),
-            // Left border.
-            FramePart::new(
-                subcompositor.create_subsurface(parent.clone(), queue_handle),
-                BORDER_SIZE,
-                0,
-                (-(BORDER_SIZE as i32), -(HEADER_SIZE as i32)),
-            ),
-        ];
+                width,
+                height,
+                pos,
+            )
+        });
 
         Self { parts }
     }
@@ -1169,6 +1158,55 @@ mod tests {
         Some(UIButton::Maximize),
         Some(UIButton::Minimize),
     ];
+
+    #[test]
+    fn decorated_geometry_covers_the_frame_exactly() {
+        for (width, height) in [(1u32, 1u32), (320, 240), (1600, 1000), (3840, 2160)] {
+            let geometry = decorated_part_geometry(width, height);
+            // The tree extent is exactly the decorated frame: header and top
+            // border above, side borders left/right, bottom border below.
+            let min_x = geometry[TOP_BORDER].0 .0;
+            let min_y = geometry[TOP_BORDER].0 .1;
+            let max_x = geometry[RIGHT_BORDER].0 .0 + geometry[RIGHT_BORDER].1 as i32;
+            let max_y = geometry[BOTTOM_BORDER].0 .1 + geometry[BOTTOM_BORDER].2 as i32;
+            assert_eq!((min_x, min_y), (-(BORDER_SIZE as i32), -(HEADER_SIZE as i32 + BORDER_SIZE as i32)));
+            assert_eq!(
+                (max_x, max_y),
+                (
+                    width as i32 + BORDER_SIZE as i32,
+                    height as i32 + BORDER_SIZE as i32
+                )
+            );
+            // The header sits directly on the main surface.
+            assert_eq!(geometry[HEADER].0 .1 + geometry[HEADER].2 as i32, 0);
+            // The side borders span the header and the main surface.
+            for part in [LEFT_BORDER, RIGHT_BORDER] {
+                assert_eq!(geometry[part].2, height + HEADER_SIZE);
+            }
+        }
+    }
+
+    #[test]
+    fn fullscreen_geometry_stays_inside_the_main_surface() {
+        for (pos, width, height) in fullscreen_part_geometry() {
+            assert_eq!((pos, width, height), ((0, 0), 1, 1));
+        }
+    }
+
+    #[test]
+    fn leaving_fullscreen_restores_the_decorated_geometry() {
+        // Regression: the fullscreen collapse used to reset width/height/pos
+        // while the restore path only rewrote some of them, leaving the
+        // header 1px tall at the origin and the bottom border past the
+        // surface. Restoring must reproduce the decorated geometry exactly.
+        let (width, height) = (1280u32, 800u32);
+        let decorated = decorated_part_geometry(width, height);
+        let collapsed = fullscreen_part_geometry();
+        for index in 0..5 {
+            assert_ne!(decorated[index], collapsed[index]);
+        }
+        assert_eq!(decorated_part_geometry(width, height), decorated);
+    }
 
     #[test]
     fn button_hit_regions_match_drawing_and_do_not_overlap() {

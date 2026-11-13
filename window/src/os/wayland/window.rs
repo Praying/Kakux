@@ -675,7 +675,18 @@ impl WaylandWindowInner {
 
     fn refresh_frame(&mut self) {
         if self.window_frame.is_dirty() && !self.window_frame.is_hidden() {
-            self.window_frame.draw();
+            let should_sync = self.window_frame.draw();
+            if should_sync {
+                // draw() moved/attached the frame subsurfaces; their state is
+                // applied on the parent's next commit. Commit now so the
+                // surface tree's extent is corrected in the same frame as a
+                // fullscreen transition instead of waiting for the next
+                // EGL swap, during which the compositor may still fit the
+                // window to the stale, decorated extent.
+                if let Some(window) = self.window.as_ref() {
+                    window.wl_surface().commit();
+                }
+            }
         }
     }
 
@@ -1030,6 +1041,38 @@ impl WaylandWindowInner {
                     self.update_window_background_blur();
                 }
                 self.do_paint().unwrap();
+            }
+        } else if pending.window_configure.is_some()
+            && self.window.is_some()
+            && !self.window_frame.is_hidden()
+            // Only when the frame state actually changed (update_state marks
+            // dirty above); a state-only configure that changes nothing must
+            // not repaint or reset the geometry.
+            && self.window_frame.is_dirty()
+        {
+            // A state-only configure (xdg allows an empty new_size, meaning
+            // "the client decides its own size") can flip FULLSCREEN without
+            // ever resizing the frame. The decorated parts would then stay at
+            // their positions outside the main surface and inflate the
+            // surface tree's extent past the screen, which makes the
+            // compositor fit the window to that extent and push the bottom
+            // rows off screen. Re-assert the frame layout for the current
+            // size so the parts collapse (or restore) together with the
+            // state change.
+            let width = self.pixels_to_surface(self.dimensions.pixel_width as i32);
+            let height = self.pixels_to_surface(self.dimensions.pixel_height as i32);
+            if width > 0 && height > 0 {
+                self.window_frame.resize(
+                    NonZeroU32::new(width as u32).unwrap(),
+                    NonZeroU32::new(height as u32).unwrap(),
+                );
+                let (x, y) = self.window_frame.location();
+                self.window
+                    .as_mut()
+                    .unwrap()
+                    .xdg_surface()
+                    .set_window_geometry(x, y, width, height);
+                pending.refresh_decorations = true;
             }
         }
         if pending.refresh_decorations && self.window.is_some() {
