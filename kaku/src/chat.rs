@@ -7,9 +7,10 @@
 //!   knowing about the 1-letter `k` shortcut.
 //! - **PATH-independent**: works even when the user has not run
 //!   `kaku init` or is on a shell without managed integration.
-//! - **One chat entry point**: we `execvp` `Kaku.app/Contents/MacOS/k`, a
-//!   symlink to `kaku-gui` that starts the chat CLI under that name. Same
-//!   chat engine, same args, and exec replaces this process in place.
+//! - **One chat entry point**: we exec the bundled `k` entry point when it is
+//!   present, or the shared `kaku-gui` multicall binary with argv0 set to `k`.
+//!   This keeps `kaku chat` working on Linux without installing a global `k`
+//!   command that could conflict with kubectl users.
 
 use anyhow::anyhow;
 use clap::Parser;
@@ -33,6 +34,7 @@ impl ChatCommand {
 
         #[cfg(unix)]
         {
+            cmd.arg0("k");
             // Exec replaces the current process; the user's $? on the next
             // shell line is exactly `k`'s exit code, with no extra fork
             // overhead and no parent-process bookkeeping.
@@ -42,36 +44,54 @@ impl ChatCommand {
     }
 }
 
-/// Locate the `k` binary that ships next to this `kaku` binary, falling back
-/// to common install locations. Mirrors the discovery order used by
-/// `init.rs` so behavior stays predictable across `kaku init`, `kaku chat`,
-/// and the standalone `k` shell wrapper.
+/// Locate the bundled chat-capable executable without consulting PATH.
+///
+/// Avoiding PATH is intentional: a user's `k` command may be kubectl, and
+/// `kaku chat` must never dispatch to an unrelated executable.
 fn resolve_k_binary() -> anyhow::Result<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
-    // 1. Same directory as the running `kaku` binary (the bundled case).
+    // 1. Same directory as the running `kaku` binary (the macOS bundle case).
     if let Ok(exe) = std::env::current_exe() {
+        #[cfg(target_os = "macos")]
         candidates.push(exe.with_file_name("k"));
         if let Ok(canonical) = std::fs::canonicalize(&exe) {
-            let beside_canonical = canonical.with_file_name("k");
-            if !candidates.contains(&beside_canonical) {
-                candidates.push(beside_canonical);
+            #[cfg(target_os = "macos")]
+            let names = ["k", "kaku-gui"];
+            #[cfg(not(target_os = "macos"))]
+            let names = ["kaku-gui"];
+            for name in names {
+                let beside_canonical = canonical.with_file_name(name);
+                if !candidates.contains(&beside_canonical) {
+                    candidates.push(beside_canonical);
+                }
             }
         }
+        candidates.push(exe.with_file_name("kaku-gui"));
     }
 
-    // 2. Standard macOS install locations.
+    // 2. Standard install locations.
     #[cfg(target_os = "macos")]
     {
-        candidates.push(PathBuf::from("/Applications/Kaku.app/Contents/MacOS/k"));
-        candidates.push(
+        for path in [
+            PathBuf::from("/Applications/Kaku.app/Contents/MacOS/k"),
             config::HOME_DIR
                 .join("Applications")
                 .join("Kaku.app")
                 .join("Contents")
                 .join("MacOS")
                 .join("k"),
-        );
+        ] {
+            candidates.push(path);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        candidates.extend([
+            PathBuf::from("/usr/local/bin/kaku-gui"),
+            PathBuf::from("/usr/bin/kaku-gui"),
+            config::HOME_DIR.join(".local").join("bin").join("kaku-gui"),
+        ]);
     }
 
     for candidate in &candidates {
@@ -81,8 +101,9 @@ fn resolve_k_binary() -> anyhow::Result<PathBuf> {
     }
 
     Err(anyhow!(
-        "could not locate the `k` chat binary. Run `kaku init` after \
-         installing Kaku, or invoke `k` directly if it is on PATH."
+        "could not locate the bundled chat entry point. Install Kaku again, \
+         or run `kaku init` to refresh the shell integration. The standalone \
+         `k` command is optional and is never required by `kaku chat`."
     ))
 }
 
@@ -108,5 +129,15 @@ mod tests {
         // result. CI machines without Kaku installed should hit the Err
         // path; developer machines will return Ok with a real path.
         let _ = resolve_k_binary();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chat_uses_argv0_instead_of_a_global_k_command() {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = std::process::Command::new("/tmp/kaku-gui");
+        command.arg0("k");
+        assert_eq!(command.get_program(), std::ffi::OsStr::new("/tmp/kaku-gui"));
     }
 }

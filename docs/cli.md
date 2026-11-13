@@ -12,7 +12,7 @@ kaku ai
 
 ## kaku chat
 
-Start Kaku's standalone AI chat from any shell. This is a discoverable alias for the bundled `k` helper, so it works even when `k` is not on your PATH.
+Start Kaku's standalone AI chat from any shell. This is a discoverable alias for Kaku's bundled chat entry point, so it works even when `k` is not on your PATH. Kaku does not install or invoke a global `k` command, allowing it to coexist with the common `kubectl` alias.
 
 ```bash
 kaku chat                 # open interactive chat
