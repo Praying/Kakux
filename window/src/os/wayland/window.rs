@@ -86,6 +86,64 @@ impl WaylandDimensions for Dimensions {
 use super::pointer::{PendingMouse, PointerUserData};
 use super::state::WaylandState;
 
+fn configured_content_size(
+    size: (u32, u32),
+    compositor_size: bool,
+    decoration_size: (u32, u32),
+) -> (u32, u32) {
+    if compositor_size {
+        (
+            size.0.saturating_sub(decoration_size.0).max(1),
+            size.1.saturating_sub(decoration_size.1).max(1),
+        )
+    } else {
+        size
+    }
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    #[test]
+    fn maximized_content_and_frame_fit_the_configured_bounds() {
+        let decoration_size = (12, 48);
+        for size in [(1440, 1000), (2560, 1440), (1280, 720)] {
+            let content = configured_content_size(size, true, decoration_size);
+            assert_eq!(content.0 + decoration_size.0, size.0);
+            assert_eq!(content.1 + decoration_size.1, size.1);
+            for dpi in [96, 192] {
+                let dimensions = Dimensions {
+                    pixel_width: 0,
+                    pixel_height: 0,
+                    dpi,
+                };
+                assert_eq!(
+                    dimensions.surface_to_pixels((content.1 + decoration_size.1) as i32),
+                    dimensions.surface_to_pixels(size.1 as i32)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fullscreen_and_client_requested_content_sizes_are_unchanged() {
+        assert_eq!(
+            configured_content_size((1440, 1000), true, (0, 0)),
+            (1440, 1000)
+        );
+        assert_eq!(
+            configured_content_size((1440, 1000), false, (12, 48)),
+            (1440, 1000)
+        );
+    }
+
+    #[test]
+    fn tiny_configures_leave_a_nonzero_content_surface() {
+        assert_eq!(configured_content_size((4, 4), true, (12, 48)), (1, 1));
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct KeyRepeatState {
     pub(super) when: Instant,
@@ -285,22 +343,24 @@ impl WaylandWindow {
         };
         window_frame.set_title(name.to_string());
         window_frame.set_hidden(!use_csd);
+        let surface_width = dimensions.pixels_to_surface(dimensions.pixel_width as i32);
+        let surface_height = dimensions.pixels_to_surface(dimensions.pixel_height as i32);
         if use_csd {
             window_frame.resize(
-                NonZeroU32::new(dimensions.pixel_width as u32)
+                NonZeroU32::new(surface_width as u32)
                     .ok_or_else(|| anyhow!("dimensions {dimensions:?} are invalid"))?,
-                NonZeroU32::new(dimensions.pixel_height as u32)
+                NonZeroU32::new(surface_height as u32)
                     .ok_or_else(|| anyhow!("dimensions {dimensions:?} are invalid"))?,
             );
         }
 
         window.set_min_size(Some((32, 32)));
         let (x, y) = window_frame.location();
-        let surface_width = dimensions.pixels_to_surface(dimensions.pixel_width as i32);
-        let surface_height = dimensions.pixels_to_surface(dimensions.pixel_height as i32);
+        let (frame_width, frame_height) =
+            window_frame.add_borders(surface_width as u32, surface_height as u32);
         window
             .xdg_surface()
-            .set_window_geometry(x, y, surface_width, surface_height);
+            .set_window_geometry(x, y, frame_width as i32, frame_height as i32);
         window.commit();
 
         let pending_mouse = PendingMouse::create(window_id);
@@ -929,6 +989,14 @@ impl WaylandWindowInner {
         }
 
         if let Some((mut w, mut h)) = pending.configure.take() {
+            (w, h) = configured_content_size(
+                (w, h),
+                pending
+                    .window_configure
+                    .as_ref()
+                    .is_some_and(|configure| matches!(configure.new_size, (Some(_), Some(_)))),
+                self.window_frame.add_borders(0, 0),
+            );
             log::trace!("Pending configure: w:{w}, h{h} -- {:?}", self.window);
             if self.window.is_some() {
                 let surface_udata = SurfaceUserData::from_wl(self.surface());
@@ -968,22 +1036,27 @@ impl WaylandWindowInner {
                 pixel_width = (pixel_width / scale) * scale;
                 pixel_height = (pixel_height / scale) * scale;
 
+                let surface_width = self.pixels_to_surface(pixel_width);
+                let surface_height = self.pixels_to_surface(pixel_height);
                 log::trace!("Resizing frame");
                 if !self.window_frame.is_hidden() {
                     // Clamp the size to at least one surface heigh/width.
-                    let width = NonZeroU32::new(w).unwrap_or(NonZeroU32::new(1).unwrap());
-                    let height = NonZeroU32::new(h).unwrap_or(NonZeroU32::new(1).unwrap());
+                    let width = NonZeroU32::new(surface_width as u32)
+                        .unwrap_or(NonZeroU32::new(1).unwrap());
+                    let height = NonZeroU32::new(surface_height as u32)
+                        .unwrap_or(NonZeroU32::new(1).unwrap());
                     self.window_frame.resize(width, height);
                     pending.refresh_decorations = true
                 }
                 let (x, y) = self.window_frame.location();
-                let surface_width = self.pixels_to_surface(pixel_width);
-                let surface_height = self.pixels_to_surface(pixel_height);
+                let (frame_width, frame_height) = self
+                    .window_frame
+                    .add_borders(surface_width as u32, surface_height as u32);
                 self.window
                     .as_mut()
                     .unwrap()
                     .xdg_surface()
-                    .set_window_geometry(x, y, surface_width, surface_height);
+                    .set_window_geometry(x, y, frame_width as i32, frame_height as i32);
                 // Compute the new pixel dimensions
                 let new_dimensions = Dimensions {
                     pixel_width: pixel_width.try_into().unwrap(),
@@ -1067,11 +1140,13 @@ impl WaylandWindowInner {
                     NonZeroU32::new(height as u32).unwrap(),
                 );
                 let (x, y) = self.window_frame.location();
+                let (frame_width, frame_height) =
+                    self.window_frame.add_borders(width as u32, height as u32);
                 self.window
                     .as_mut()
                     .unwrap()
                     .xdg_surface()
-                    .set_window_geometry(x, y, width, height);
+                    .set_window_geometry(x, y, frame_width as i32, frame_height as i32);
                 pending.refresh_decorations = true;
             }
         }

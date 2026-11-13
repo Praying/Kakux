@@ -73,3 +73,11 @@ env -u KAKU_CONFIG_FILE -u KAKU_CONFIG_DIR -u KAKU_SESSION \
 6. Start `sleep 600` in a disposable tab, click close, and verify the existing confirmation/cancel policy. Do not use an important session for this check.
 
 These taps have not been executed by the agent. No automated synthetic mouse interaction was used.
+
+## Bottom-row regression follow-up — 2026-11-13
+
+The original screenshots contained only a few lines near the top and did not verify bottom-row visibility. A continuous-output probe now prints 100 lines followed by a green `BOTTOM INPUT MUST BE VISIBLE >` prompt without a trailing newline. In a maximized 1440×1000 virtual Wayland window on commit `0ea81f50`, the last output line and input prompt were below the screen (`target/ui-preview/bottom-max-before.png`). This reproduces the reporter's decorated, screen-filling window independently of true fullscreen.
+
+The Wayland configure handler treated the compositor's decorated window dimensions as content dimensions and advertised a geometry size that excluded the decorations. The fix subtracts the current frame extents only from compositor-provided sizes and adds them when advertising window geometry. Synthetic content resize requests and undecorated/fullscreen sizes stay unchanged. Initial frame sizes also use logical surface coordinates rather than physical pixels.
+
+The new `geometry_tests` fail with the old identity size conversion and pass with the fix. All 15 window library tests and 681 GUI tests pass (one GUI test ignored). Post-fix continuous-output screenshots show the entire input row in maximized horizontal tabs (`bottom-max-after.png`), maximized vertical tabs (`bottom-vertical-after.png`) and true fullscreen (`bottom-fullscreen-after.png`). These screenshots live under `target/ui-preview/`; they do not claim verification of the user's exact monitor scaling or personal shell configuration.
